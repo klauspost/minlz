@@ -1,2 +1,6 @@
 github.com/klauspost/compress v1.17.11 h1:In6xLpyWOi1+C7tXUUWv2ot1QvBjxevKAaI6IXrJmUc=
 github.com/klauspost/compress v1.17.11/go.mod h1:pMDklpSncoRMuLFrf1W9Ss9KT+0rH90U12bZKk7uwG0=
+github.com/miniohq/transcend v0.0.0-20250328184349-f26dedc0b8d4 h1:+sJxiu/i4qdoHy26TUrJGaGRkvDACfz1Lsfq/USwgOo=
+github.com/miniohq/transcend v0.0.0-20250328184349-f26dedc0b8d4/go.mod h1:XGTenMKrRyD8XjsGJ0SDwx0oon1583GDH4ecLGXuCDs=
+golang.org/x/sys v0.29.0 h1:TPYlXGxvx1MGTn2GiZDhnjPA9wZzZeGKHHmKhHYvgaU=
+golang.org/x/sys v0.29.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=

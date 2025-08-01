@@ -33,6 +33,7 @@ import (
 	"github.com/minio/minlz"
 	"github.com/minio/minlz/cmd/internal/filepathx"
 	"github.com/minio/minlz/cmd/internal/readahead"
+	"github.com/miniohq/transcend/ans"
 )
 
 func mainCompress(args []string) {
@@ -46,6 +47,7 @@ func mainCompress(args []string) {
 		blockSize = fs.String("bs", "8M", "Max block size. Examples: 64K, 256K, 1M, 8M. Must be power of two and <= 8MB")
 		index     = fs.Bool("index", true, "Add seek index")
 		padding   = fs.String("pad", "1", "Pad size to a multiple of this value, Examples: 500, 64K, 256K, 1M, 4M, etc")
+		transcend = fs.Bool("transcend", false, "Use transcend instead.")
 
 		// Shared
 		block  = fs.Bool("block", false, "Use as a single block. Will load content into memory. Max 8MB.")
@@ -99,6 +101,19 @@ Options:`)
 		level = minlz.LevelSmallest
 	}
 	opts := []minlz.WriterOption{minlz.WriterBlockSize(int(sz)), minlz.WriterConcurrency(*cpu), minlz.WriterPadding(int(pad)), minlz.WriterLevel(level), minlz.WriterAddIndex(*index)}
+	if *transcend {
+		opts = append(opts, minlz.WriterCustomEncoder(func(dst, src []byte) int {
+			compressedChunkLen := ans.CompressChunk(src, dst[:0])
+			if compressedChunkLen <= 0 || int(compressedChunkLen) >= len(src) {
+				// Compression failed, return 0
+				return 0
+			}
+			return int(compressedChunkLen)
+		}), minlz.WriterBlockSize(1<<20))
+		if sz > 1<<20 {
+			opts = append(opts, minlz.WriterBlockSize(1<<20))
+		}
+	}
 	wr := minlz.NewWriter(nil, opts...)
 
 	// No args, use stdin/stdout

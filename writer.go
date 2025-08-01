@@ -46,7 +46,7 @@ func NewWriter(w io.Writer, opts ...WriterOption) *Writer {
 			return &w2
 		}
 	}
-	w2.obufLen = obufHeaderLen + MaxEncodedLen(w2.blockSize)
+	w2.obufLen = obufHeaderLen + MaxEncodedLen(w2.blockSize) + w2.extraDstSize
 	w2.paramsOK = true
 	w2.ibuf = make([]byte, 0, w2.blockSize)
 	w2.buffers.New = func() interface{} {
@@ -73,11 +73,13 @@ type Writer struct {
 	buffers       sync.Pool
 	pad           int
 
-	writer    io.Writer
-	randSrc   io.Reader
-	writerWg  sync.WaitGroup
-	index     *Index
-	customEnc func(dst, src []byte) int
+	writer       io.Writer
+	randSrc      io.Reader
+	writerWg     sync.WaitGroup
+	index        *Index
+	customEnc    func(dst, src []byte) int
+	customEncID  uint8
+	extraDstSize int
 
 	// wroteStreamHeader is whether we have written the stream header.
 	wroteStreamHeader bool
@@ -429,6 +431,10 @@ func (w *Writer) EncodeBuffer(buf []byte) (err error) {
 }
 
 func (w *Writer) encodeBlock(obuf, uncompressed []byte) int {
+	if w.customEncID != 0 {
+		return w.customEnc(obuf, uncompressed)
+	}
+
 	if w.customEnc != nil {
 		if ret := w.customEnc(obuf, uncompressed); ret >= 0 {
 			return ret
@@ -505,8 +511,6 @@ func (w *Writer) write(p []byte) (nRet int, errRet error) {
 		w.uncompWritten += int64(len(uncompressed))
 
 		go func() {
-			checksum := crc(uncompressed)
-
 			// Set to uncompressed.
 			chunkType := uint8(chunkTypeUncompressedData)
 			chunkLen := 4 + len(uncompressed)
@@ -530,10 +534,13 @@ func (w *Writer) write(p []byte) (nRet int, errRet error) {
 			obuf[1] = uint8(chunkLen >> 0)
 			obuf[2] = uint8(chunkLen >> 8)
 			obuf[3] = uint8(chunkLen >> 16)
-			obuf[4] = uint8(checksum >> 0)
-			obuf[5] = uint8(checksum >> 8)
-			obuf[6] = uint8(checksum >> 16)
-			obuf[7] = uint8(checksum >> 24)
+			if w.customEncID == 0 || n2 == 0 {
+				checksum := crc(uncompressed)
+				obuf[4] = uint8(checksum >> 0)
+				obuf[5] = uint8(checksum >> 8)
+				obuf[6] = uint8(checksum >> 16)
+				obuf[7] = uint8(checksum >> 24)
+			}
 
 			// Queue final output.
 			res.b = obuf
@@ -959,6 +966,7 @@ func WriterBlockSize(n int) WriterOption {
 		if n > maxBlockSize || n < minBlockSize {
 			return errors.New("minlz: block size out of bounds. Must be <= 4MB and >=4KB")
 		}
+		w.extraDstSize = 10
 		w.blockSize = n
 		return nil
 	}
@@ -1018,6 +1026,23 @@ func WriterFlushOnWrite() WriterOption {
 func WriterCustomEncoder(fn func(dst, src []byte) int) WriterOption {
 	return func(w *Writer) error {
 		w.customEnc = fn
+		return nil
+	}
+}
+
+// WriterCustomEncoderID allows to override the encoder for blocks on the stream.
+// The function must compress 'src' into 'dst' and return the bytes used in dst as an integer.
+// Block size (initial varint) should not be added by the encoder.
+// Returning value <= 0 indicates the block could not be compressed.
+// The block will then be stored uncompressed.
+// The provided id must be between MinUserNonSkippableChunk and MaxUserNonSkippableChunk, inclusive.
+func WriterCustomEncoderID(id uint8, fn func(dst, src []byte) int) WriterOption {
+	return func(w *Writer) error {
+		if id < MinUserNonSkippableChunk || id > MaxUserNonSkippableChunk {
+			return fmt.Errorf("invalid custom encoder id %x", id)
+		}
+		w.customEnc = fn
+		w.customEncID = id
 		return nil
 	}
 }
