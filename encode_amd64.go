@@ -40,23 +40,23 @@ func encodeBlock(dst, src []byte) (d int) {
 
 	switch {
 	case len(src) > 2<<20:
-		const sz, pool = 131072, 0
+		const sz, pool = 32768, 0
 		tmp, ok := encPools[pool].Get().(*[sz]byte)
 		if !ok {
 			tmp = &[sz]byte{}
 		}
 		race.WriteSlice(tmp[:])
 		defer encPools[pool].Put(tmp)
-		return encodeBlockAsm(dst, src, tmp)
+		return encodeFastBlockAsm(dst, src, tmp)
 	case len(src) > 512<<10:
-		const sz, pool = 131072, 0
+		const sz, pool = 32768, 0
 		tmp, ok := encPools[pool].Get().(*[sz]byte)
 		if !ok {
 			tmp = &[sz]byte{}
 		}
 		race.WriteSlice(tmp[:])
 		defer encPools[pool].Put(tmp)
-		return encodeBlockAsm2MB(dst, src, tmp)
+		return encodeFastBlockAsm2MB(dst, src, tmp)
 	case len(src) > 64<<10:
 		const sz, pool = 65536, 2
 		tmp, ok := encPools[pool].Get().(*[sz]byte)
