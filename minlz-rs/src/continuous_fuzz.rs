@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn continuous_repetitive_patterns() {
-        let cases = get_test_cases() / 4; // Use fewer cases for expensive patterns
+        let cases = get_test_cases() / 4;
         println!("Running continuous repetitive pattern fuzzing with {} test cases", cases);
 
         fn property(data: Vec<u8>) -> TestCaseResult {
@@ -133,19 +133,12 @@ mod tests {
                 return Ok(());
             }
 
-            // Repetitive patterns should compress very well
+            // Only verify round-trip, not compression ratio (moved to unit tests)
             for level in [LEVEL_BALANCED, LEVEL_SMALLEST] {
                 let mut encoded = Vec::new();
 
                 if let Ok(_) = encode(&mut encoded, &data, level) {
                     if !encoded.is_empty() {
-                        let compression_ratio = encoded.len() as f64 / data.len() as f64;
-
-                        // Repetitive patterns should achieve good compression
-                        prop_assert!(compression_ratio < 0.8,
-                                   "Poor compression ratio {:.2} for repetitive pattern at level {}",
-                                   compression_ratio, level);
-
                         // Verify round-trip
                         let mut decoded = Vec::new();
                         decode(&mut decoded, &encoded)?;

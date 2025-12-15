@@ -7,6 +7,7 @@
 /// Hash function for 4-byte patterns.
 /// Used by Level 2 and Level 3 encoders for short pattern matching.
 /// Prime: 2654435761 (FNV-like prime for good distribution)
+#[inline(always)]
 pub fn hash4(u: u64, h: u8) -> u32 {
     const PRIME_4BYTES: u32 = 2654435761;
     ((u as u32).wrapping_mul(PRIME_4BYTES)) >> ((32 - h) & 31)
@@ -15,6 +16,7 @@ pub fn hash4(u: u64, h: u8) -> u32 {
 /// Hash function for 5-byte patterns.
 /// Used by Level 2 encoder for intermediate pattern lengths.
 /// Prime: 889523592379 (chosen for good avalanche properties)
+#[inline(always)]
 pub fn hash5(u: u64, h: u8) -> u32 {
     const PRIME_5BYTES: u64 = 889523592379;
     (((u << (64 - 40)).wrapping_mul(PRIME_5BYTES)) >> ((64 - h) & 63)) as u32
@@ -23,6 +25,7 @@ pub fn hash5(u: u64, h: u8) -> u32 {
 /// Hash function for 6-byte patterns.
 /// Used by Level 1 and Level 2 encoders - the primary hash for Level 1.
 /// Prime: 227718039650203 (optimized for 6-byte pattern distribution)
+#[inline(always)]
 pub fn hash6(u: u64, h: u8) -> u32 {
     const PRIME_6BYTES: u64 = 227718039650203;
     (((u << (64 - 48)).wrapping_mul(PRIME_6BYTES)) >> ((64 - h) & 63)) as u32
@@ -31,6 +34,7 @@ pub fn hash6(u: u64, h: u8) -> u32 {
 /// Hash function for 7-byte patterns.
 /// Used by Level 2 and Level 3 encoders for longer pattern matching.
 /// Prime: 58295818150454627 (chosen for minimal collisions on text data)
+#[inline(always)]
 pub fn hash7(u: u64, h: u8) -> u32 {
     const PRIME_7BYTES: u64 = 58295818150454627;
     (((u << (64 - 56)).wrapping_mul(PRIME_7BYTES)) >> ((64 - h) & 63)) as u32
@@ -39,12 +43,14 @@ pub fn hash7(u: u64, h: u8) -> u32 {
 /// Hash function for 8-byte patterns (full u64).
 /// Used by Level 3 encoder for maximum pattern length matching.
 /// Prime: 0xcf1bbcdcb7a56463 (high-quality hash multiplication constant)
+#[inline(always)]
 pub fn hash8(u: u64, h: u8) -> u32 {
     const PRIME_8BYTES: u64 = 0xcf1bbcdcb7a56463;
     (u.wrapping_mul(PRIME_8BYTES) >> ((64 - h) & 63)) as u32
 }
 
 /// Convenience function to load a 64-bit value and hash it with hash4
+#[inline(always)]
 #[allow(dead_code)]
 pub fn hash4_at(data: &[u8], pos: usize, h: u8) -> u32 {
     if pos + 8 <= data.len() {
@@ -61,6 +67,7 @@ pub fn hash4_at(data: &[u8], pos: usize, h: u8) -> u32 {
 }
 
 /// Convenience function to load a 64-bit value and hash it with hash5
+#[inline(always)]
 #[allow(dead_code)]
 pub fn hash5_at(data: &[u8], pos: usize, h: u8) -> u32 {
     if pos + 8 <= data.len() {
@@ -76,6 +83,7 @@ pub fn hash5_at(data: &[u8], pos: usize, h: u8) -> u32 {
 }
 
 /// Convenience function to load a 64-bit value and hash it with hash6
+#[inline(always)]
 #[allow(dead_code)]
 pub fn hash6_at(data: &[u8], pos: usize, h: u8) -> u32 {
     if pos + 8 <= data.len() {
@@ -91,6 +99,7 @@ pub fn hash6_at(data: &[u8], pos: usize, h: u8) -> u32 {
 }
 
 /// Convenience function to load a 64-bit value and hash it with hash7
+#[inline(always)]
 #[allow(dead_code)]
 pub fn hash7_at(data: &[u8], pos: usize, h: u8) -> u32 {
     if pos + 8 <= data.len() {
@@ -106,6 +115,7 @@ pub fn hash7_at(data: &[u8], pos: usize, h: u8) -> u32 {
 }
 
 /// Convenience function to load a 64-bit value and hash it with hash8
+#[inline(always)]
 #[allow(dead_code)]
 pub fn hash8_at(data: &[u8], pos: usize, h: u8) -> u32 {
     if pos + 8 <= data.len() {

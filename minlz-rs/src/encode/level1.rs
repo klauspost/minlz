@@ -43,7 +43,7 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
 
     // Start looking for matches at position 1
     let mut s = 1;
-    let mut cv = load64(src, s)?;
+    let mut cv = unsafe { load64_unchecked(src, s) }; // Safe: s=1, src.len() >= INPUT_MARGIN
 
     // Track repeat offset for repeat detection
     let mut repeat = 1;
@@ -80,7 +80,7 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
 
             // Check repeat at offset 1
             const CHECK_REP: usize = 1;
-            if (cv >> (CHECK_REP * 8)) as u32 == load32(src, s - repeat + CHECK_REP)? {
+            if (cv >> (CHECK_REP * 8)) as u32 == unsafe { load32_unchecked(src, s - repeat + CHECK_REP) } {
                 let mut base = s + CHECK_REP;
 
                 // Extend backwards
@@ -102,9 +102,11 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                 s += 4 + CHECK_REP;
 
                 while s <= s_limit {
-                    if load64(src, s)? ^ load64(src, candidate_pos)? != 0 {
+                    let a = unsafe { load64_unchecked(src, s) };
+                    let b = unsafe { load64_unchecked(src, candidate_pos) };
+                    if a ^ b != 0 {
                         // Find exact mismatch position
-                        let diff = load64(src, s)? ^ load64(src, candidate_pos)?;
+                        let diff = a ^ b;
                         s += diff.trailing_zeros() as usize / 8;
                         break;
                     }
@@ -126,17 +128,17 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                     return Ok(d);
                 }
 
-                cv = load64(src, s)?;
+                cv = unsafe { load64_unchecked(src, s) };
                 continue 'outer;
             }
 
             // Check candidate matches
-            if candidate >= min_src_pos && (cv as u32) == load32(src, candidate)? {
+            if candidate >= min_src_pos && (cv as u32) == unsafe { load32_unchecked(src, candidate) } {
                 break;
             }
 
             candidate = table[hash2 as usize] as usize;
-            if candidate2 >= min_src_pos && ((cv >> 8) as u32) == load32(src, candidate2)? {
+            if candidate2 >= min_src_pos && ((cv >> 8) as u32) == unsafe { load32_unchecked(src, candidate2) } {
                 table[hash2 as usize] = (s + 2) as u32;
                 candidate = candidate2;
                 s += 1;
@@ -144,12 +146,12 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             }
 
             table[hash2 as usize] = (s + 2) as u32;
-            if candidate >= min_src_pos && ((cv >> 16) as u32) == load32(src, candidate)? {
+            if candidate >= min_src_pos && ((cv >> 16) as u32) == unsafe { load32_unchecked(src, candidate) } {
                 s += 2;
                 break;
             }
 
-            cv = load64(src, next_s)?;
+            cv = unsafe { load64_unchecked(src, next_s) };
             s = next_s;
         }
 
@@ -168,7 +170,7 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
         candidate += 4;
 
         while s <= src.len() - 8 {
-            let diff = load64(src, s)? ^ load64(src, candidate)?;
+            let diff = unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate) };
             if diff != 0 {
                 s += diff.trailing_zeros() as usize / 8;
                 break;
@@ -211,7 +213,7 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                 return Ok(d);
             }
 
-            let x = load64(src, s - 2)?;
+            let x = unsafe { load64_unchecked(src, s - 2) };
 
             if d > dst_limit {
                 return Ok(0);
@@ -225,8 +227,8 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             table[m2_hash as usize] = (s - 2) as u32;
             table[curr_hash as usize] = s as u32;
 
-            if s - candidate > MAX_COPY3_OFFSET || (x as u32) != load32(src, candidate)? {
-                cv = load64(src, s + 1)?;
+            if s - candidate > MAX_COPY3_OFFSET || (x as u32) != unsafe { load32_unchecked(src, candidate) } {
+                cv = unsafe { load64_unchecked(src, s + 1) };
                 s += 1;
                 break;
             }
@@ -265,7 +267,7 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
 
     let mut next_emit = 0;
     let mut s = 1;
-    let mut cv = load64(src, s)?;
+    let mut cv = unsafe { load64_unchecked(src, s) };
     let mut repeat = 1;
     let mut d = 0;
 
@@ -297,7 +299,7 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
 
             // Check repeat
             const CHECK_REP: usize = 1;
-            if (cv >> (CHECK_REP * 8)) as u32 == load32(src, s - repeat + CHECK_REP)? {
+            if (cv >> (CHECK_REP * 8)) as u32 == unsafe { load32_unchecked(src, s - repeat + CHECK_REP) } {
                 let mut base = s + CHECK_REP;
 
                 // Extend backwards
@@ -340,17 +342,17 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                     return Ok(d);
                 }
 
-                cv = load64(src, s)?;
+                cv = unsafe { load64_unchecked(src, s) };
                 continue 'outer;
             }
 
             // Check candidates (no bound check needed for 64K)
-            if (cv as u32) == load32(src, candidate)? {
+            if (cv as u32) == unsafe { load32_unchecked(src, candidate) } {
                 break;
             }
 
             candidate = table[hash2 as usize] as usize;
-            if ((cv >> 8) as u32) == load32(src, candidate2)? {
+            if ((cv >> 8) as u32) == unsafe { load32_unchecked(src, candidate2) } {
                 table[hash2 as usize] = (s + 2) as u16;
                 candidate = candidate2;
                 s += 1;
@@ -358,12 +360,12 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             }
 
             table[hash2 as usize] = (s + 2) as u16;
-            if ((cv >> 16) as u32) == load32(src, candidate)? {
+            if ((cv >> 16) as u32) == unsafe { load32_unchecked(src, candidate) } {
                 s += 2;
                 break;
             }
 
-            cv = load64(src, next_s)?;
+            cv = unsafe { load64_unchecked(src, next_s) };
             s = next_s;
         }
 
@@ -381,7 +383,7 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
         candidate += 4;
 
         while s <= src.len() - 8 {
-            let diff = load64(src, s)? ^ load64(src, candidate)?;
+            let diff = unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate) };
             if diff != 0 {
                 s += diff.trailing_zeros() as usize / 8;
                 break;
@@ -421,7 +423,7 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                 return Ok(d);
             }
 
-            let x = load64(src, s - 2)?;
+            let x = unsafe { load64_unchecked(src, s - 2) };
 
             if d > dst_limit {
                 return Ok(0);

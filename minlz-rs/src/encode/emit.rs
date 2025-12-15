@@ -68,27 +68,32 @@ pub fn emit_repeat(dst: &mut [u8], length: usize) -> Result<usize> {
         return Ok(0);
     }
 
-    if length < 30 {
-        store8(dst, 0, ((length - 1) << 3) as u8 | TAG_REPEAT)?;
-        Ok(1)
-    } else if length < 286 { // 30 + 256
-        let length = length - 30;
-        store8(dst, 1, length as u8)?;
-        store8(dst, 0, 29 << 3 | TAG_REPEAT)?;
-        Ok(2)
-    } else if length < 65566 { // 30 + 65536
-        let length = length - 30;
-        dst[2] = (length >> 8) as u8;
-        dst[1] = length as u8;
-        dst[0] = 30 << 3 | TAG_REPEAT;
-        Ok(3)
-    } else {
-        let length = length - 30;
-        dst[3] = (length >> 16) as u8;
-        dst[2] = (length >> 8) as u8;
-        dst[1] = length as u8;
-        dst[0] = 31 << 3 | TAG_REPEAT;
-        Ok(4)
+    match length {
+        1..30 => {
+            store8(dst, 0, ((length - 1) << 3) as u8 | TAG_REPEAT)?;
+            Ok(1)
+        }
+        30..286 => { // 30 + 256
+            let length = length - 30;
+            store8(dst, 1, length as u8)?;
+            store8(dst, 0, 29 << 3 | TAG_REPEAT)?;
+            Ok(2)
+        }
+        286..65566 => { // 30 + 65536
+            let length = length - 30;
+            dst[2] = (length >> 8) as u8;
+            dst[1] = length as u8;
+            dst[0] = 30 << 3 | TAG_REPEAT;
+            Ok(3)
+        }
+        _ => {
+            let length = length - 30;
+            dst[3] = (length >> 16) as u8;
+            dst[2] = (length >> 8) as u8;
+            dst[1] = length as u8;
+            dst[0] = 31 << 3 | TAG_REPEAT;
+            Ok(4)
+        }
     }
 }
 
@@ -99,40 +104,43 @@ pub fn emit_repeat(dst: &mut [u8], length: usize) -> Result<usize> {
 /// - Length: minimum 4 bytes
 /// - Can include embedded literals (lits parameter)
 fn encode_copy3(dst: &mut [u8], offset: usize, length: usize, lits: usize) -> Result<usize> {
-    if offset < 65536 {
-        return Err(crate::error::Error::Corrupt);
-    }
+    debug_assert!(offset >= 65536, "Copy3 offset must be >= 65536");
 
     let length = length.saturating_sub(4);
 
     // Encode offset (subtract base to fit in 21 bits)
     let mut encoded = ((offset - 65536) << 11) as u32 | TAG_COPY3 as u32 | ((lits << 3) as u32);
 
-    if length <= 60 {
-        encoded |= (length << 5) as u32;
-        store32(dst, 0, encoded)?;
-        Ok(4)
-    } else if length <= 316 { // 60 + 256
-        let length = length - 60;
-        store8(dst, 4, length as u8)?;
-        encoded |= 61 << 5;
-        store32(dst, 0, encoded)?;
-        Ok(5)
-    } else if length <= 65596 { // 60 + 65536
-        let length = length - 60;
-        encoded |= 62 << 5;
-        dst[5] = (length >> 8) as u8;
-        dst[4] = length as u8;
-        store32(dst, 0, encoded)?;
-        Ok(6)
-    } else {
-        let length = length - 60;
-        encoded |= 63 << 5;
-        dst[6] = (length >> 16) as u8;
-        dst[5] = (length >> 8) as u8;
-        dst[4] = length as u8;
-        store32(dst, 0, encoded)?;
-        Ok(7)
+    match length {
+        0..=60 => {
+            encoded |= (length << 5) as u32;
+            store32(dst, 0, encoded)?;
+            Ok(4)
+        }
+        61..=316 => { // 60 + 256
+            let length = length - 60;
+            store8(dst, 4, length as u8)?;
+            encoded |= 61 << 5;
+            store32(dst, 0, encoded)?;
+            Ok(5)
+        }
+        317..=65596 => { // 60 + 65536
+            let length = length - 60;
+            encoded |= 62 << 5;
+            dst[5] = (length >> 8) as u8;
+            dst[4] = length as u8;
+            store32(dst, 0, encoded)?;
+            Ok(6)
+        }
+        _ => {
+            let length = length - 60;
+            encoded |= 63 << 5;
+            dst[6] = (length >> 16) as u8;
+            dst[5] = (length >> 8) as u8;
+            dst[4] = length as u8;
+            store32(dst, 0, encoded)?;
+            Ok(7)
+        }
     }
 }
 
@@ -142,36 +150,40 @@ fn encode_copy3(dst: &mut [u8], offset: usize, length: usize, lits: usize) -> Re
 /// - Offset range: 64 to 65535
 /// - Length: minimum 4 bytes
 fn encode_copy2(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> {
-    if offset < MIN_COPY2_OFFSET || offset > MAX_COPY2_OFFSET {
-        return Err(crate::error::Error::Corrupt);
-    }
+    debug_assert!(offset >= MIN_COPY2_OFFSET && offset <= MAX_COPY2_OFFSET,
+                  "Copy2 offset must be in range {}-{}", MIN_COPY2_OFFSET, MAX_COPY2_OFFSET);
 
     let length = length.saturating_sub(4);
     let offset = offset - MIN_COPY2_OFFSET;
 
     store16(dst, 1, offset as u16)?;
 
-    if length <= 60 {
-        store8(dst, 0, (length << 2) as u8 | TAG_COPY2)?;
-        Ok(3)
-    } else if length <= 316 { // 60 + 256
-        let length = length - 60;
-        store8(dst, 3, length as u8)?;
-        store8(dst, 0, 61 << 2 | TAG_COPY2)?;
-        Ok(4)
-    } else if length <= 65596 { // 60 + 65536
-        let length = length - 60;
-        dst[4] = (length >> 8) as u8;
-        dst[3] = length as u8;
-        dst[0] = 62 << 2 | TAG_COPY2;
-        Ok(5)
-    } else {
-        let length = length - 60;
-        dst[5] = (length >> 16) as u8;
-        dst[4] = (length >> 8) as u8;
-        dst[3] = length as u8;
-        dst[0] = 63 << 2 | TAG_COPY2;
-        Ok(6)
+    match length {
+        0..=60 => {
+            store8(dst, 0, (length << 2) as u8 | TAG_COPY2)?;
+            Ok(3)
+        }
+        61..=316 => { // 60 + 256
+            let length = length - 60;
+            store8(dst, 3, length as u8)?;
+            store8(dst, 0, 61 << 2 | TAG_COPY2)?;
+            Ok(4)
+        }
+        317..=65596 => { // 60 + 65536
+            let length = length - 60;
+            dst[4] = (length >> 8) as u8;
+            dst[3] = length as u8;
+            dst[0] = 62 << 2 | TAG_COPY2;
+            Ok(5)
+        }
+        _ => {
+            let length = length - 60;
+            dst[5] = (length >> 16) as u8;
+            dst[4] = (length >> 8) as u8;
+            dst[3] = length as u8;
+            dst[0] = 63 << 2 | TAG_COPY2;
+            Ok(6)
+        }
     }
 }
 
@@ -182,51 +194,54 @@ fn encode_copy2(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> {
 /// - Medium offsets (64-65535): Copy2 format
 /// - Large offsets (65536+): Copy3 format
 pub fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> {
-    if offset == 0 || offset > MAX_COPY3_OFFSET {
-        return Err(crate::error::Error::Corrupt);
-    }
+    debug_assert!(offset > 0 && offset <= MAX_COPY3_OFFSET,
+                  "Copy offset must be in range 1-{}", MAX_COPY3_OFFSET);
 
     // println!("DEBUG emit_copy: offset={}, length={}, MAX_COPY1_OFFSET={}, MAX_COPY2_OFFSET={}",
     //     offset, length, MAX_COPY1_OFFSET, MAX_COPY2_OFFSET);
 
-    if offset > MAX_COPY2_OFFSET {
-        // Use Copy3 for large offsets
-        // println!("DEBUG emit_copy: Taking Copy3 path");
-        encode_copy3(dst, offset, length, 0)
-    } else if offset <= MAX_COPY1_OFFSET {
-        // Use Copy1 for small offsets
-        // println!("DEBUG emit_copy: Taking Copy1 path");
-        let offset = offset - 1; // Copy1 stores offset-1
-
-        if length < 15 + 4 {
-            // Copy1 format: bits 0-1=tag(1), bits 2-5=length-4, bits 6-7=offset_low_2_bits
-            let byte1 = ((offset & 0x03) << 6) | ((length - 4) << 2) | TAG_COPY1 as usize;
-            let byte2 = offset >> 2;
-            // println!("DEBUG emit_copy Copy1: offset={}, length={}, byte1={}, byte2={}", offset, length, byte1, byte2);
-            dst[0] = byte1 as u8;
-            dst[1] = byte2 as u8;
-            Ok(2)
-        } else if length < 256 + 18 {
-            // Copy1 format with length extension
-            let byte1 = ((offset & 0x03) << 6) | (15 << 2) | TAG_COPY1 as usize;
-            let byte2 = offset >> 2;
-            dst[0] = byte1 as u8;
-            dst[1] = byte2 as u8;
-            dst[2] = (length - 18) as u8;
-            Ok(3)
-        } else {
-            // Encode as Copy1 + repeat for very long lengths
-            let byte1 = ((offset & 0x03) << 6) | (14 << 2) | TAG_COPY1 as usize;
-            let byte2 = offset >> 2;
-            dst[0] = byte1 as u8;
-            dst[1] = byte2 as u8;
-            let repeat_len = emit_repeat(&mut dst[2..], length - 18)?;
-            Ok(2 + repeat_len)
+    match offset {
+        o if o > MAX_COPY2_OFFSET => {
+            // Use Copy3 for large offsets
+            encode_copy3(dst, offset, length, 0)
         }
-    } else {
-        // Use Copy2 for medium offsets
-        // println!("DEBUG emit_copy: Taking Copy2 path");
-        encode_copy2(dst, offset, length)
+        o if o <= MAX_COPY1_OFFSET => {
+            // Use Copy1 for small offsets
+            let offset = offset - 1; // Copy1 stores offset-1
+
+            match length {
+                4..19 => { // length < 15 + 4
+                    // Copy1 format: bits 0-1=tag(1), bits 2-5=length-4, bits 6-7=offset_low_2_bits
+                    let byte1 = ((offset & 0x03) << 6) | ((length - 4) << 2) | TAG_COPY1 as usize;
+                    let byte2 = offset >> 2;
+                    dst[0] = byte1 as u8;
+                    dst[1] = byte2 as u8;
+                    Ok(2)
+                }
+                19..274 => { // length < 256 + 18
+                    // Copy1 format with length extension
+                    let byte1 = ((offset & 0x03) << 6) | (15 << 2) | TAG_COPY1 as usize;
+                    let byte2 = offset >> 2;
+                    dst[0] = byte1 as u8;
+                    dst[1] = byte2 as u8;
+                    dst[2] = (length - 18) as u8;
+                    Ok(3)
+                }
+                _ => {
+                    // Encode as Copy1 + repeat for very long lengths
+                    let byte1 = ((offset & 0x03) << 6) | (14 << 2) | TAG_COPY1 as usize;
+                    let byte2 = offset >> 2;
+                    dst[0] = byte1 as u8;
+                    dst[1] = byte2 as u8;
+                    let repeat_len = emit_repeat(&mut dst[2..], length - 18)?;
+                    Ok(2 + repeat_len)
+                }
+            }
+        }
+        _ => {
+            // Use Copy2 for medium offsets
+            encode_copy2(dst, offset, length)
+        }
     }
 }
 
@@ -236,9 +251,9 @@ pub fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> 
 /// within a Copy2 operation, saving space when there are small
 /// literal runs before a copy.
 pub fn emit_copy_lits2(dst: &mut [u8], lits: &[u8], offset: usize, length: usize) -> Result<usize> {
-    if lits.len() > MAX_COPY2_LITS || offset < MIN_COPY2_OFFSET || offset > MAX_COPY2_OFFSET {
-        return Err(crate::error::Error::Corrupt);
-    }
+    debug_assert!(lits.len() <= MAX_COPY2_LITS, "Too many literals for Copy2: {} > {}", lits.len(), MAX_COPY2_LITS);
+    debug_assert!(offset >= MIN_COPY2_OFFSET && offset <= MAX_COPY2_OFFSET,
+                  "Copy2 offset must be in range {}-{}", MIN_COPY2_OFFSET, MAX_COPY2_OFFSET);
 
     let offset = offset - MIN_COPY2_OFFSET;
     let length = length.saturating_sub(4);
@@ -263,9 +278,8 @@ pub fn emit_copy_lits2(dst: &mut [u8], lits: &[u8], offset: usize, length: usize
 ///
 /// Similar to Copy2 but for large offsets, allows 1-3 literals to be embedded.
 pub fn emit_copy_lits3(dst: &mut [u8], lits: &[u8], offset: usize, length: usize) -> Result<usize> {
-    if lits.len() > MAX_COPY3_LITS || offset <= MAX_COPY2_OFFSET {
-        return Err(crate::error::Error::Corrupt);
-    }
+    debug_assert!(lits.len() <= MAX_COPY3_LITS, "Too many literals for Copy3: {} > {}", lits.len(), MAX_COPY3_LITS);
+    debug_assert!(offset > MAX_COPY2_OFFSET, "Copy3 offset too small: {} <= {}", offset, MAX_COPY2_OFFSET);
 
     let n = encode_copy3(dst, offset, length, lits.len())?;
     dst[n..n + lits.len()].copy_from_slice(lits);
@@ -430,10 +444,9 @@ mod tests {
             while test_off <= MAX_COPY3_OFFSET {
                 let mut ml = 4;
                 while ml <= 1 << 24 {
-                    let n = if !lits.is_empty() {
-                        emit_copy_lits3(&mut tmp, &lits, test_off, ml).unwrap()
-                    } else {
-                        emit_copy(&mut tmp, test_off, ml).unwrap()
+                    let n = match lits.is_empty() {
+                        false => emit_copy_lits3(&mut tmp, &lits, test_off, ml).unwrap(),
+                        true => emit_copy(&mut tmp, test_off, ml).unwrap(),
                     };
                     let input = &tmp[..n];
                     let got_tag = input[0] & 7;
@@ -443,21 +456,12 @@ mod tests {
                     let length_raw = (load16(input, 0).unwrap() >> 5) as usize & 63;
                     let offset = (load32(input, 0).unwrap() >> 11) as usize + MIN_COPY3_OFFSET;
 
-                    let (length, mut s) = if length_raw <= 60 {
-                        (length_raw + 4, 4)
-                    } else {
-                        match length_raw {
-                            61 => {
-                                (input[4] as usize + MIN_COPY3_LENGTH, 5)
-                            }
-                            62 => {
-                                (input[4] as usize | (input[5] as usize) << 8, 6)
-                            }
-                            63 => {
-                                (input[4] as usize | (input[5] as usize) << 8 | (input[6] as usize) << 16, 7)
-                            }
-                            _ => panic!("invalid length encoding"),
-                        }
+                    let (length, mut s) = match length_raw {
+                        0..=60 => (length_raw + 4, 4),
+                        61 => (input[4] as usize + MIN_COPY3_LENGTH, 5),
+                        62 => (input[4] as usize | (input[5] as usize) << 8, 6),
+                        63 => (input[4] as usize | (input[5] as usize) << 8 | (input[6] as usize) << 16, 7),
+                        _ => panic!("invalid length encoding"),
                     };
 
                     let nlits = ((input[0] >> 3) & 3) as usize;
@@ -478,10 +482,9 @@ mod tests {
                 test_off *= 2;
                 if test_off < MAX_COPY2_OFFSET + 1 { break; }
             }
-            if lits.len() == 0 {
-                lits.push(1);
-            } else {
-                lits.push((lits.len() + 1) as u8);
+            match lits.len() {
+                0 => lits.push(1),
+                len => lits.push((len + 1) as u8),
             }
         }
 

@@ -231,7 +231,11 @@ fn decode_literal_header(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, b
             30 + len as usize
         }
         LITERAL_LENGTH_3_BYTE => {
-            let len = load32(src, *s)? >> 8; // Only use 3 bytes
+            // Read exactly 3 bytes for length
+            let byte1 = load8(src, *s)? as u32;
+            let byte2 = load8(src, *s + 1)? as u32;
+            let byte3 = load8(src, *s + 2)? as u32;
+            let len = byte1 | (byte2 << 8) | (byte3 << 16);
             *s += 3;
             30 + len as usize
         }

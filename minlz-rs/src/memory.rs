@@ -82,3 +82,42 @@ pub fn store32(dst: &mut [u8], index: usize, value: u32) -> Result<()> {
     Ok(())
 }
 
+// Fast unsafe versions for hot paths where bounds are guaranteed
+// These should only be used in encoder inner loops where bounds have already been checked
+
+/// Unsafe fast load of 64-bit value - no bounds checking
+#[inline(always)]
+pub unsafe fn load64_unchecked(src: &[u8], index: usize) -> u64 {
+    u64::from_le_bytes([
+        *src.get_unchecked(index),
+        *src.get_unchecked(index + 1),
+        *src.get_unchecked(index + 2),
+        *src.get_unchecked(index + 3),
+        *src.get_unchecked(index + 4),
+        *src.get_unchecked(index + 5),
+        *src.get_unchecked(index + 6),
+        *src.get_unchecked(index + 7),
+    ])
+}
+
+/// Unsafe fast load of 32-bit value - no bounds checking
+#[inline(always)]
+pub unsafe fn load32_unchecked(src: &[u8], index: usize) -> u32 {
+    u32::from_le_bytes([
+        *src.get_unchecked(index),
+        *src.get_unchecked(index + 1),
+        *src.get_unchecked(index + 2),
+        *src.get_unchecked(index + 3),
+    ])
+}
+
+/// Unsafe fast load of 16-bit value - no bounds checking
+#[inline(always)]
+#[allow(dead_code)]
+pub unsafe fn load16_unchecked(src: &[u8], index: usize) -> u16 {
+    u16::from_le_bytes([
+        *src.get_unchecked(index),
+        *src.get_unchecked(index + 1),
+    ])
+}
+
