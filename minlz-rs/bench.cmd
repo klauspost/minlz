@@ -5,11 +5,12 @@ echo 1. Quick test (random data benchmark)
 echo 2. All benchmarks (SLOW - takes a long time!)
 echo 3. Level 1 benchmarks only
 echo 4. Level 2 benchmarks only
-echo 5. Twain series benchmarks
-echo 6. File-based benchmarks
-echo 7. Run tests only
+echo 5. Level 3 benchmarks only
+echo 6. Twain series benchmarks
+echo 7. File-based benchmarks
+echo 8. Run tests only
 echo.
-choice /c 1234567 /m "Select option: "
+choice /c 12345678 /m "Select option: "
 
 if %errorlevel%==1 (
     echo.
@@ -39,17 +40,23 @@ if %errorlevel%==4 (
 )
 if %errorlevel%==5 (
     echo.
+    echo Running Level 3 benchmarks...
+    cargo bench --bench comparison_benchmarks -- "level-3"
+    goto end
+)
+if %errorlevel%==6 (
+    echo.
     echo Running Twain series benchmarks...
     cargo bench --bench comparison_benchmarks -- "twain"
     goto end
 )
-if %errorlevel%==6 (
+if %errorlevel%==7 (
     echo.
     echo Running file-based benchmarks...
     cargo bench --bench comparison_benchmarks -- "encode_html"
     goto end
 )
-if %errorlevel%==7 (
+if %errorlevel%==8 (
     echo.
     echo Running test suite...
     cargo test

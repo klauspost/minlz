@@ -43,12 +43,35 @@ See [BENCHMARKS.md](BENCHMARKS.md) for complete benchmarking documentation and p
 
 ## Development
 
+### Testing and Benchmarking
+
+For Windows users, convenient batch files are provided:
+
+```bash
+# Interactive benchmark runner with Level 1, 2, and 3 options
+bench.cmd
+
+# Interactive fuzz testing with continuous options
+fuzz.cmd
+```
+
+Or use cargo directly:
+
 ```bash
 # Run tests
 cargo test
 
-# Run benchmarks
+# Run all benchmarks (takes a long time)
 cargo bench
+
+# Run Level 3 specific benchmarks
+cargo bench --bench comparison_benchmarks -- "level-3"
+
+# Run fuzz tests (see FUZZING.md for continuous/advanced options)
+cargo test fuzz_tests::
+
+# Run high-intensity continuous fuzzing (stable Rust)
+cargo test continuous_fuzz:: --release -- --nocapture
 
 # Check compilation
 cargo check --all-targets

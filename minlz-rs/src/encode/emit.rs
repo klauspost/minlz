@@ -326,15 +326,12 @@ mod tests {
 
                 let length = ((input[0] as usize) >> 2) & 15;
                 let offset = (load16(input, 0).unwrap() >> 6) as usize + 1;
-                let mut s = 0;
 
-                let expected_length = if length == 15 {
+                let (expected_length, s) = if length == 15 {
                     let ext_len = input[2] as usize + 18;
-                    s = 3;
-                    ext_len
+                    (ext_len, 3)
                 } else {
-                    s = 2;
-                    length + 4
+                    (length + 4, 2)
                 };
 
                 assert_eq!(expected_length, l, "length mismatch for off: {}, ml: {}", off, l);
@@ -350,7 +347,6 @@ mod tests {
             while ml <= 1 << 24 {
                 let n = emit_copy(&mut tmp, test_off, ml).unwrap();
                 let input = &tmp[..n];
-                let mut s = 0;
 
                 let got_tag = input[0] & 3;
                 let want_tag = TAG_COPY2;
@@ -359,28 +355,28 @@ mod tests {
                 let mut length = (input[0] as usize) >> 2;
                 let offset = (input[1] as u32 | (input[2] as u32) << 8) as usize;
 
-                if length <= 60 {
+                let s = if length <= 60 {
                     length += 4;
-                    s = 3;
+                    3
                 } else {
                     match length {
                         61 => {
                             length = input[3] as usize + 64;
-                            s = 4;
+                            4
                         }
                         62 => {
                             length = input[3] as usize | (input[4] as usize) << 8;
                             length += 64;
-                            s = 5;
+                            5
                         }
                         63 => {
                             length = input[3] as usize | (input[4] as usize) << 8 | (input[5] as usize) << 16;
                             length += 64;
-                            s = 6;
+                            6
                         }
                         _ => panic!("invalid length encoding"),
                     }
-                }
+                };
                 let final_offset = offset + MIN_COPY2_OFFSET;
 
                 assert_eq!(length, ml, "length mismatch for off: {}, ml: {}", test_off, ml);
@@ -440,8 +436,6 @@ mod tests {
                         emit_copy(&mut tmp, test_off, ml).unwrap()
                     };
                     let input = &tmp[..n];
-                    let mut s = 0;
-
                     let got_tag = input[0] & 7;
                     let want_tag = TAG_COPY3;
                     assert_eq!(got_tag, want_tag, "tag mismatch for off: {}, ml: {}, ll: {}", test_off, ml, lits.len());
@@ -449,22 +443,18 @@ mod tests {
                     let length_raw = (load16(input, 0).unwrap() >> 5) as usize & 63;
                     let offset = (load32(input, 0).unwrap() >> 11) as usize + MIN_COPY3_OFFSET;
 
-                    let length = if length_raw <= 60 {
-                        s = 4;
-                        length_raw + 4
+                    let (length, mut s) = if length_raw <= 60 {
+                        (length_raw + 4, 4)
                     } else {
                         match length_raw {
                             61 => {
-                                s = 5;
-                                input[4] as usize + MIN_COPY3_LENGTH
+                                (input[4] as usize + MIN_COPY3_LENGTH, 5)
                             }
                             62 => {
-                                s = 6;
-                                input[4] as usize | (input[5] as usize) << 8
+                                (input[4] as usize | (input[5] as usize) << 8, 6)
                             }
                             63 => {
-                                s = 7;
-                                input[4] as usize | (input[5] as usize) << 8 | (input[6] as usize) << 16
+                                (input[4] as usize | (input[5] as usize) << 8 | (input[6] as usize) << 16, 7)
                             }
                             _ => panic!("invalid length encoding"),
                         }
@@ -499,32 +489,27 @@ mod tests {
         for l in 1..=1000 { // Reduced from MaxBlockSize for test performance
             let n = emit_repeat(&mut tmp, l).unwrap();
             let input = &tmp[..n];
-            let mut s = 0;
 
             let got_tag = input[0] & 7;
             let want_tag = TAG_REPEAT;
             assert_eq!(got_tag, want_tag, "tag mismatch for length {}", l);
 
             let length_tmp = (input[0] >> 3) as usize;
-            let length = match length_tmp {
+            let (length, s) = match length_tmp {
                 29 => {
                     assert!(n >= 2, "insufficient bytes for length {}", l);
-                    s = 2;
-                    input[1] as usize + 30
+                    (input[1] as usize + 30, 2)
                 }
                 30 => {
                     assert!(n >= 3, "insufficient bytes for length {}", l);
-                    s = 3;
-                    (input[1] as usize | (input[2] as usize) << 8) + 30
+                    ((input[1] as usize | (input[2] as usize) << 8) + 30, 3)
                 }
                 31 => {
                     assert!(n >= 4, "insufficient bytes for length {}", l);
-                    s = 4;
-                    (input[1] as usize | (input[2] as usize) << 8 | (input[3] as usize) << 16) + 30
+                    ((input[1] as usize | (input[2] as usize) << 8 | (input[3] as usize) << 16) + 30, 4)
                 }
                 _ => {
-                    s = 1;
-                    length_tmp + 1
+                    (length_tmp + 1, 1)
                 }
             };
 

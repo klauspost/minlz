@@ -43,6 +43,10 @@ mod integration_tests;
 #[cfg(test)]
 mod fuzz_tests;
 
+#[cfg(test)]
+mod continuous_fuzz;
+
+
 pub use constants::*;
 pub use error::{Error, Result};
 pub use encode::encode;

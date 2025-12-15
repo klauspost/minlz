@@ -102,11 +102,12 @@ fn emit_copy2_size(length: usize) -> usize {
 fn emit_copy_size(offset: usize, length: usize) -> usize {
     if offset > 65536 + 63 {
         // 3 Byte offset + Variable length (base length 4)
-        let mut length = length - 64; // Base is free. We can add 64 for free.
-        if length <= 0 {
+        if length <= 64 {
+            // Base length is included for free
             4
         } else {
-            4 + ((length.ilog2() as usize + 7) / 8)
+            let extra_length = length - 64; // Extra length beyond the base
+            4 + ((extra_length.ilog2() as usize + 7) / 8)
         }
     } else if offset <= 1024 {
         // Offset no more than 2 bytes
@@ -423,6 +424,54 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                         best = best_of(best, match_at(src, get_prev(next_short2), s_fwd2, cv_fwd2 as u32, &best, next_emit, s_limit));
                         best = best_of(best, match_at(src, get_cur(next_long2), s_fwd2, cv_fwd2 as u32, &best, next_emit, s_limit));
                         best = best_of(best, match_at(src, get_prev(next_long2), s_fwd2, cv_fwd2 as u32, &best, next_emit, s_limit));
+                    }
+                }
+            }
+
+            // Search for a match at best match end - critical optimization from Go
+            // This searches for better matches near the end of current best match
+            if best.length > 0 {
+                const SKIP_BEGINNING: usize = 2;
+                const SKIP_END: usize = 1;
+                let s_at = best.s + best.length - SKIP_END;
+
+                if s_at < s_limit {
+                    let s_back = best.s + SKIP_BEGINNING - SKIP_END;
+                    let back_l = best.length - SKIP_BEGINNING;
+
+                    if s_back < src.len().saturating_sub(8) && back_l > 0 {
+                        let cv_back = load64(src, s_back)?;
+
+                        // Get candidates from hash table at match end position
+                        if s_at < src.len().saturating_sub(8) {
+                            let hash_l_at = hash8(load64(src, s_at)?, L_TABLE_BITS) as usize;
+                            let next_l = l_table[hash_l_at];
+
+                            // Test candidates with backward extension
+                            let check_at_cur = get_cur(next_l).saturating_sub(back_l);
+                            let check_at_prev = get_prev(next_l).saturating_sub(back_l);
+
+                            if check_at_cur > 0 {
+                                best = best_of(best, match_at(src, check_at_cur, s_back, cv_back as u32, &best, next_emit, s_limit));
+                            }
+                            if check_at_prev > 0 {
+                                best = best_of(best, match_at(src, check_at_prev, s_back, cv_back as u32, &best, next_emit, s_limit));
+                            }
+
+                            // Test short hash candidates too
+                            let hash_s_at = hash4(load64(src, s_at)?, S_TABLE_BITS) as usize;
+                            let next_s = s_table[hash_s_at];
+
+                            let check_at_cur_s = get_cur(next_s).saturating_sub(back_l);
+                            let check_at_prev_s = get_prev(next_s).saturating_sub(back_l);
+
+                            if check_at_cur_s > 0 {
+                                best = best_of(best, match_at(src, check_at_cur_s, s_back, cv_back as u32, &best, next_emit, s_limit));
+                            }
+                            if check_at_prev_s > 0 {
+                                best = best_of(best, match_at(src, check_at_prev_s, s_back, cv_back as u32, &best, next_emit, s_limit));
+                            }
+                        }
                     }
                 }
             }
