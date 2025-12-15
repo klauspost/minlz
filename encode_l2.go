@@ -380,7 +380,7 @@ func encodeBlockBetterGo64K(dst, src []byte) (d int) {
 	s := 1
 	cv := load64(src, s)
 
-	// We initialize repeat to 0, so we never match on first attempt
+	// Repeat is 1 on default.
 	repeat := 1
 
 	if debugEncode {

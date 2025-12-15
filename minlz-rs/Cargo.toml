@@ -1,0 +1,28 @@
+[package]
+name = "minlz"
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "MinLZ compression library - Rust implementation"
+homepage = "https://github.com/minio/minlz-rs"
+repository = "https://github.com/minio/minlz-rs"
+readme = "README.md"
+keywords = ["compression", "lz77", "minlz", "performance"]
+categories = ["compression", "algorithms"]
+
+[dependencies]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.0"
+hex = "0.4"
+reqwest = { version = "0.11", features = ["blocking"] }
+tokio = { version = "1.0", features = ["rt-multi-thread"] }
+
+[[bench]]
+name = "simple_benchmarks"
+harness = false
+
+[[bench]]
+name = "comparison_benchmarks"
+harness = false
