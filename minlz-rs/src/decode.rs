@@ -105,11 +105,10 @@ fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
     let mut d = 0; // destination position
     let mut s = 0; // source position
     let mut offset = 1; // last copy offset for repeats
-    let mut instruction_count = 0;
 
     // Fast path - decode with margin for bounds checking
     while s + 11 < src.len() && d + 11 < dst.len() {
-        let tag = load8(src, s)?;
+        let tag = unsafe { *src.get_unchecked(s) };
         s += 1;
 
         match tag & 0x03 {
@@ -128,29 +127,65 @@ fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                     }
                     copy_literals(dst, &mut d, src, &mut s, length)?;
                 }
-                instruction_count += 1;
             }
 
             TAG_COPY1 => {
-                let (new_offset, length) = decode_copy1(src, &mut s, tag)?;
-                if false {
-                    println!("{}: (copy1) - copy, length: {} offset: {} ... [d-after: {} s-after: {} ]",
-                            d, length, new_offset, d + length, s);
-                }
+                // Fast path copy1 decode with unsafe access
+                let length_val = (tag >> 2) & 15;
+                let offset_lb = (tag >> 6) & 3;
+                let offset_ub = unsafe { *src.get_unchecked(s) };
+                s += 1;
+
+                let new_offset = (((offset_ub as usize) << 2) | (offset_lb as usize)) + 1;
+                let length = if length_val == COPY1_LENGTH_EXTENDED {
+                    let extra_len = unsafe { *src.get_unchecked(s) };
+                    s += 1;
+                    COPY1_EXTENDED_BASE + extra_len as usize
+                } else {
+                    COPY1_BASE_LENGTH + length_val as usize
+                };
+
                 offset = new_offset;
                 copy_match(dst, &mut d, offset, length)?;
-                instruction_count += 1;
             }
 
             TAG_COPY2 => {
-                let (new_offset, length) = decode_copy2(src, &mut s, tag)?;
-                if false {
-                    println!("{}: (copy2) - copy, length: {} offset: {} ... [d-after: {} s-after: {} ]",
-                            d, length, new_offset, d + length, s);
-                }
+                // Fast path copy2 decode with unsafe access
+                let new_offset = unsafe {
+                    u16::from_le_bytes([*src.get_unchecked(s), *src.get_unchecked(s + 1)])
+                } as usize + MIN_COPY2_OFFSET;
+                s += 2;
+
+                let length = match tag >> 2 {
+                    val @ 0..=COPY2_LENGTH_MAX_DIRECT => COPY2_BASE_LENGTH + val as usize,
+                    COPY2_LENGTH_1_BYTE => {
+                        let extra_len = unsafe { *src.get_unchecked(s) };
+                        s += 1;
+                        COPY2_EXTENDED_BASE + extra_len as usize
+                    }
+                    COPY2_LENGTH_2_BYTE => {
+                        let extra_len = unsafe {
+                            u16::from_le_bytes([*src.get_unchecked(s), *src.get_unchecked(s + 1)])
+                        };
+                        s += 2;
+                        COPY2_EXTENDED_BASE + extra_len as usize
+                    }
+                    _ => {
+                        let extra_len = unsafe {
+                            u32::from_le_bytes([
+                                *src.get_unchecked(s),
+                                *src.get_unchecked(s + 1),
+                                *src.get_unchecked(s + 2),
+                                0
+                            ])
+                        };
+                        s += 3;
+                        COPY2_EXTENDED_BASE + extra_len as usize
+                    }
+                };
+
                 offset = new_offset;
                 copy_match(dst, &mut d, offset, length)?;
-                instruction_count += 1;
             }
 
             _ => {
@@ -167,8 +202,7 @@ fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                     }
                     offset = new_offset;
                     copy_match(dst, &mut d, offset, length)?;
-                    instruction_count += 1;
-                } else {
+                    } else {
                     // Copy3
                     let (new_offset, length, lit_len) = decode_copy3(src, &mut s, tag)?;
                     if false {
@@ -180,8 +214,7 @@ fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                     }
                     offset = new_offset;
                     copy_match(dst, &mut d, offset, length)?;
-                    instruction_count += 1;
-                }
+                    }
             }
         }
     }
@@ -248,6 +281,7 @@ fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
 }
 
 /// Decode literal length and repeat flag from tag
+#[inline(always)]
 fn decode_literal_header(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, bool)> {
     let repeat = tag & 4 != 0;
     let x = tag >> 3;
@@ -324,9 +358,6 @@ fn copy_match(dst: &mut [u8], d: &mut usize, offset: usize, length: usize) -> Re
     } else {
         // Overlapping copy - byte by byte
         for i in 0..length {
-            if *d + i >= dst.len() || src_start + i >= dst.len() {
-                return Err(Error::Corrupt);
-            }
             dst[*d + i] = dst[src_start + i];
         }
     }
@@ -356,6 +387,7 @@ fn copy_repeat_safe(dst: &mut [u8], d: &mut usize, offset: usize, length: usize)
 // Placeholder implementations for copy decoders - these need to be implemented
 // following the SPEC.md format exactly
 
+#[inline(always)]
 fn decode_copy1(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, usize)> {
     // Copy1 with 1-byte offset (tag 01)
     // Bits 2-5: Length (0-15), Bits 6-7: Offset LB (lower 2 bits)
@@ -406,6 +438,7 @@ fn decode_copy1_safe(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, usize
     Ok((offset, length))
 }
 
+#[inline(always)]
 fn decode_copy2(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, usize)> {
     // Copy2 with 2-byte offset (tag 10)
     // Bits 2-7: Length (0-63)
@@ -479,6 +512,7 @@ fn decode_copy2_safe(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, usize
     Ok((offset, length))
 }
 
+#[inline(always)]
 fn decode_fused_copy2(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, usize, usize)> {
     // Fused Copy2 (tag 11, bit 2 = 0)
     // Bits 3-4: Literal length + 1 [1->4]
@@ -507,6 +541,7 @@ fn decode_fused_copy2_safe(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize,
     Ok((offset, copy_length, lit_len))
 }
 
+#[inline(always)]
 fn decode_copy3(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, usize, usize)> {
     // Copy3 (tag 11, bit 2 = 1)
     // Bits 3-4: Literal length [0->3]
