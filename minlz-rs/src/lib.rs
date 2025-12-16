@@ -45,6 +45,12 @@ mod debug_go_block;
 mod large_file_test;
 
 #[cfg(test)]
+mod decode_benchmark;
+
+#[cfg(test)]
+mod debug_corruption;
+
+#[cfg(test)]
 mod tests;
 
 

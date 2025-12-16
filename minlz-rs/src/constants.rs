@@ -13,7 +13,7 @@ pub const TAG_LITERAL: u8 = 0x00;
 pub const TAG_REPEAT: u8 = 0x00 | (1 << 2);
 pub const TAG_COPY1: u8 = 0x01;
 pub const TAG_COPY2: u8 = 0x02;
-pub const TAG_COPY3: u8 = 0x03;
+pub const TAG_COPY3: u8 = 0x07;  // bits 0-1: 3, bit 2: 1 (Copy3 flag)
 pub const TAG_COPY2_FUSED: u8 = 0x03;
 
 /// Copy operation limits and offsets

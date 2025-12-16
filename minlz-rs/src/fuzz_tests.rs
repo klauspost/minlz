@@ -87,7 +87,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(ProptestConfig::with_cases(1000), |(data in arbitrary_data(100000))| {
+        proptest!(ProptestConfig::with_cases(1000), |(data in arbitrary_data(3145728))| {
             property(data)?;
         });
     }
@@ -109,7 +109,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(ProptestConfig::with_cases(1000), |(data in arbitrary_data(100000))| {
+        proptest!(ProptestConfig::with_cases(1000), |(data in arbitrary_data(3145728))| {
             property(data)?;
         });
     }
@@ -131,7 +131,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(ProptestConfig::with_cases(1000), |(data in arbitrary_data(100000))| {
+        proptest!(ProptestConfig::with_cases(1000), |(data in arbitrary_data(3145728))| {
             property(data)?;
         });
     }
@@ -155,7 +155,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(ProptestConfig::with_cases(500), |(data in arbitrary_data(50000), level in 1..=2i32)| {
+        proptest!(ProptestConfig::with_cases(500), |(data in arbitrary_data(3145728), level in 1..=2i32)| {
             property(data, level)?;
         });
     }
@@ -188,7 +188,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(ProptestConfig::with_cases(500), |(data in repetitive_data(10000))| {
+        proptest!(ProptestConfig::with_cases(500), |(data in repetitive_data(3145728))| {
             property(data)?;
         });
     }
@@ -235,7 +235,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(ProptestConfig::with_cases(200), |(data in structured_data(5000))| {
+        proptest!(ProptestConfig::with_cases(200), |(data in structured_data(3145728))| {
             property(data)?;
         });
     }
@@ -267,7 +267,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(ProptestConfig::with_cases(500), |(data in arbitrary_data(10000))| {
+        proptest!(ProptestConfig::with_cases(500), |(data in arbitrary_data(3145728))| {
             property(data)?;
         });
     }
@@ -295,7 +295,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(ProptestConfig::with_cases(200), |(data in arbitrary_data(1000), buf_size in 0..=50usize)| {
+        proptest!(ProptestConfig::with_cases(200), |(data in arbitrary_data(100000), buf_size in 0..=50usize)| {
             property(data, buf_size)?;
         });
     }
@@ -336,7 +336,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(ProptestConfig::with_cases(300), |(data in repetitive_data(2000))| {
+        proptest!(ProptestConfig::with_cases(300), |(data in repetitive_data(3145728))| {
             property(data)?;
         });
     }
