@@ -5,6 +5,19 @@ use crate::error::{Error, Result};
 /// Maximum number of bytes in a varint-encoded value
 const MAX_VARINT_LEN: usize = 10;
 
+/// Encode an unsigned 64-bit integer as a varint and append to a Vec
+pub fn encode_uvarint_vec(dst: &mut Vec<u8>, mut value: u64) -> Result<usize> {
+    let start_len = dst.len();
+
+    while value >= 0x80 {
+        dst.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    dst.push(value as u8);
+
+    Ok(dst.len() - start_len)
+}
+
 /// Encode an unsigned 64-bit integer as a varint and return bytes written
 pub fn encode_uvarint(dst: &mut [u8], mut value: u64) -> Result<usize> {
     let mut i = 0;
@@ -75,6 +88,14 @@ pub fn varint_len(mut value: u64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_varint_vec() {
+        let mut buf = Vec::new();
+        let len = encode_uvarint_vec(&mut buf, 300).unwrap();
+        assert_eq!(len, 2);
+        assert_eq!(buf, vec![0xAC, 0x02]); // 300 in varint format
+    }
 
     #[test]
     fn test_varint_roundtrip() {

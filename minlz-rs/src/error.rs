@@ -6,7 +6,7 @@ use std::fmt;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Errors that can occur during compression/decompression
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum Error {
     /// Input data is corrupted or invalid
     Corrupt,
@@ -22,6 +22,12 @@ pub enum Error {
 
     /// CRC checksum mismatch (for streams)
     CrcMismatch,
+
+    /// Invalid input parameter or data
+    InvalidInput(String),
+
+    /// I/O error
+    Io(std::io::Error),
 }
 
 impl fmt::Display for Error {
@@ -32,8 +38,23 @@ impl fmt::Display for Error {
             Error::Unsupported => write!(f, "minlz: unsupported input"),
             Error::InvalidLevel => write!(f, "minlz: invalid compression level"),
             Error::CrcMismatch => write!(f, "minlz: corrupt input, crc mismatch"),
+            Error::InvalidInput(msg) => write!(f, "minlz: invalid input: {}", msg),
+            Error::Io(err) => write!(f, "minlz: I/O error: {}", err),
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::Io(err)
+    }
+}

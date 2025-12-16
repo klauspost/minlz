@@ -32,6 +32,17 @@ mod memory;
 mod varint;
 mod decode;
 mod encode;
+mod stream;
+mod index;
+mod writer;
+mod reader;
+mod parallel;
+
+#[cfg(test)]
+mod debug_go_block;
+
+#[cfg(test)]
+mod large_file_test;
 
 #[cfg(test)]
 mod tests;
@@ -52,6 +63,10 @@ pub use constants::*;
 pub use error::{Error, Result};
 pub use encode::encode;
 pub use decode::decode;
+pub use writer::{Writer, WriterBuilder};
+pub use reader::Reader;
+pub use index::{Index, OffsetPair};
+pub use parallel::{CompressionPool, BufferPool};
 
 /// Maximum size of a block that can be compressed/decompressed
 pub const MAX_BLOCK_SIZE: usize = 8 << 20; // 8 MiB

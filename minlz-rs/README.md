@@ -8,10 +8,14 @@ This is the Rust implementation of MinLZ compression library, providing high-per
 - **Full format compatibility** with MinLZ Go implementation
 - **Safe Rust implementation** with comprehensive error handling
 - **Block-level compression** up to 8MB blocks
+- **Streaming compression** with the MinLZ Writer for efficient large data processing
+- **MinLZ stream format support** with headers, user chunks, and EOF markers
 - **Comprehensive test suite** with round-trip validation and fuzz testing
 - **Performance benchmarks** for comparison with Go implementation
 
 ## Quick Start
+
+### Block-Level Compression
 
 ```rust
 use minlz::{encode, decode, LEVEL_BALANCED};
@@ -23,6 +27,32 @@ encode(&mut encoded, data, LEVEL_BALANCED)?;
 let mut decoded = Vec::new();
 decode(&mut decoded, &encoded)?;
 assert_eq!(&decoded, data);
+```
+
+### Streaming Compression
+
+```rust
+use minlz::{Writer, LEVEL_BALANCED};
+use std::io::Write;
+
+// Create a streaming writer
+let mut output = Vec::new();
+let mut writer = Writer::builder(&mut output)
+    .compression_level(LEVEL_BALANCED)
+    .block_size(1024 * 1024) // 1MB blocks
+    .build()?;
+
+// Write data (can be called multiple times)
+writer.write_all(b"First chunk of data")?;
+writer.write_all(b"Second chunk of data")?;
+
+// Add user-defined metadata chunks
+writer.add_user_chunk(0x80, b"author=MinLZ Team")?;
+
+// Finish and get the compressed stream
+let (compressed_stream, _index) = writer.finish()?;
+
+// The output contains a valid MinLZ stream with headers, compressed blocks, and EOF
 ```
 
 ## Performance Benchmarks

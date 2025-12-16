@@ -22,12 +22,12 @@ pub fn decode(dst: &mut Vec<u8>, src: &[u8]) -> Result<()> {
         return Err(Error::Unsupported);
     }
 
+
     // Ensure dst has enough capacity
     dst.clear();
     dst.resize(decoded_len, 0);
 
-    minlz_decode(&mut dst[..], block)?;
-    Ok(())
+    minlz_decode(&mut dst[..], block)
 }
 
 /// Check if data is MinLZ format and return metadata
@@ -105,6 +105,7 @@ fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
     let mut d = 0; // destination position
     let mut s = 0; // source position
     let mut offset = 1; // last copy offset for repeats
+    let mut instruction_count = 0;
 
     // Fast path - decode with margin for bounds checking
     while s + 11 < src.len() && d + 11 < dst.len() {
@@ -115,22 +116,41 @@ fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
             TAG_LITERAL => {
                 let (length, repeat) = decode_literal_header(src, &mut s, tag)?;
                 if repeat {
+                    if false {
+                        println!("{}: (repeat) - copy, length: {} offset: {} ... [d-after: {} s-after: {} ]",
+                                d, length, offset, d + length, s);
+                    }
                     copy_repeat(dst, &mut d, offset, length)?;
                 } else {
+                    if false {
+                        println!("{}: (literals), length: {}... [d-after: {} s-after:{}]",
+                                d, length, d + length, s + length);
+                    }
                     copy_literals(dst, &mut d, src, &mut s, length)?;
                 }
+                instruction_count += 1;
             }
 
             TAG_COPY1 => {
                 let (new_offset, length) = decode_copy1(src, &mut s, tag)?;
+                if false {
+                    println!("{}: (copy1) - copy, length: {} offset: {} ... [d-after: {} s-after: {} ]",
+                            d, length, new_offset, d + length, s);
+                }
                 offset = new_offset;
                 copy_match(dst, &mut d, offset, length)?;
+                instruction_count += 1;
             }
 
             TAG_COPY2 => {
                 let (new_offset, length) = decode_copy2(src, &mut s, tag)?;
+                if false {
+                    println!("{}: (copy2) - copy, length: {} offset: {} ... [d-after: {} s-after: {} ]",
+                            d, length, new_offset, d + length, s);
+                }
                 offset = new_offset;
                 copy_match(dst, &mut d, offset, length)?;
+                instruction_count += 1;
             }
 
             _ => {
@@ -138,19 +158,29 @@ fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                 if tag & 4 == 0 {
                     // Fused Copy2
                     let (new_offset, length, lit_len) = decode_fused_copy2(src, &mut s, tag)?;
+                    if false {
+                        println!("{}: (copy2f) (fused lits: {}) - copy, length: {} offset: {} ... [d-after: {} s-after: {} ]",
+                                d, lit_len, length, new_offset, d + lit_len + length, s);
+                    }
                     if lit_len > 0 {
                         copy_literals(dst, &mut d, src, &mut s, lit_len)?;
                     }
                     offset = new_offset;
                     copy_match(dst, &mut d, offset, length)?;
+                    instruction_count += 1;
                 } else {
                     // Copy3
                     let (new_offset, length, lit_len) = decode_copy3(src, &mut s, tag)?;
+                    if false {
+                        println!("{}: (copy3) - copy, length: {} offset: {} ... [d-after: {} s-after: {} ]",
+                                d, length, new_offset, d + lit_len + length, s);
+                    }
                     if lit_len > 0 {
                         copy_literals(dst, &mut d, src, &mut s, lit_len)?;
                     }
                     offset = new_offset;
                     copy_match(dst, &mut d, offset, length)?;
+                    instruction_count += 1;
                 }
             }
         }
@@ -167,6 +197,10 @@ fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                 if repeat {
                     copy_repeat_safe(dst, &mut d, offset, length)?;
                 } else {
+                    if dst.len() > 8_000_000 && d < 2000 {
+                        println!("SLOW PATH: {}: (literals), length: {}... [d-after: {} s-after:{}]",
+                                d, length, d + length, s + length);
+                    }
                     copy_literals_safe(dst, &mut d, src, &mut s, length)?;
                 }
             }
@@ -221,6 +255,9 @@ fn decode_literal_header(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, b
     let length = match x {
         0..=LITERAL_LENGTH_SMALL_MAX => (x + 1) as usize,
         LITERAL_LENGTH_1_BYTE => {
+            if *s >= src.len() {
+                return Err(Error::Corrupt);
+            }
             let len_byte = load8(src, *s)?;
             *s += 1;
             30 + len_byte as usize
@@ -479,11 +516,16 @@ fn decode_copy3(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, usize, usi
     // Literals (if any)
 
     let lit_len = ((tag >> 3) & 3) as usize; // 0-3 literals
-    let val = load32(src, *s)?;
-    *s += 4;
+
+    // Copy3 reads 3 bytes after the tag, but we need the tag + 3 bytes as a 32-bit value
+    // Since s has already been incremented past the tag, read from s-1 to include the tag
+    let val = load32(src, *s - 1)?;
+    *s += 3; // Advance by 3 bytes (tag was already consumed)
 
     let length_val = (val >> 5) & 63; // 6 bits for length
-    let offset = (val >> 11) as usize + MIN_COPY3_OFFSET; // 21 bits for offset
+    let raw_offset = val >> 11; // 21 bits for offset
+    let offset = (raw_offset as usize) + MIN_COPY3_OFFSET;
+
 
     let length = if length_val <= COPY3_LENGTH_MAX_DIRECT as u32 {
         COPY3_BASE_LENGTH + length_val as usize
@@ -509,11 +551,13 @@ fn decode_copy3(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, usize, usi
 fn decode_copy3_safe(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, usize, usize)> {
     let lit_len = ((tag >> 3) & 3) as usize;
 
-    if *s + 4 > src.len() {
+    if *s + 3 > src.len() {
         return Err(Error::Corrupt);
     }
-    let val = u32::from_le_bytes([src[*s], src[*s + 1], src[*s + 2], src[*s + 3]]);
-    *s += 4;
+
+    // Read from s-1 to include the tag as part of the 4-byte value
+    let val = u32::from_le_bytes([src[*s - 1], src[*s], src[*s + 1], src[*s + 2]]);
+    *s += 3;
 
     let length_val = (val >> 5) & 63;
     let offset = (val >> 11) as usize + MIN_COPY3_OFFSET;
