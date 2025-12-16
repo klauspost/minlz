@@ -198,7 +198,7 @@ fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                                 d, lit_len, length, new_offset, d + lit_len + length, s);
                     }
                     if lit_len > 0 {
-                        copy_literals(dst, &mut d, src, &mut s, lit_len)?;
+                        copy_fused_literals(dst, &mut d, src, &mut s, lit_len)?;
                     }
                     offset = new_offset;
                     copy_match(dst, &mut d, offset, length)?;
@@ -289,23 +289,22 @@ fn decode_literal_header(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, b
     let length = match x {
         0..=LITERAL_LENGTH_SMALL_MAX => (x + 1) as usize,
         LITERAL_LENGTH_1_BYTE => {
-            if *s >= src.len() {
-                return Err(Error::Corrupt);
-            }
-            let len_byte = load8(src, *s)?;
+            let len_byte = unsafe { *src.get_unchecked(*s) };
             *s += 1;
             30 + len_byte as usize
         }
         LITERAL_LENGTH_2_BYTE => {
-            let len = load16(src, *s)?;
+            let len = unsafe {
+                u16::from_le_bytes([*src.get_unchecked(*s), *src.get_unchecked(*s + 1)])
+            };
             *s += 2;
             30 + len as usize
         }
         LITERAL_LENGTH_3_BYTE => {
             // Read exactly 3 bytes for length
-            let byte1 = load8(src, *s)? as u32;
-            let byte2 = load8(src, *s + 1)? as u32;
-            let byte3 = load8(src, *s + 2)? as u32;
+            let byte1 = unsafe { *src.get_unchecked(*s) } as u32;
+            let byte2 = unsafe { *src.get_unchecked(*s + 1) } as u32;
+            let byte3 = unsafe { *src.get_unchecked(*s + 2) } as u32;
             let len = byte1 | (byte2 << 8) | (byte3 << 16);
             *s += 3;
             30 + len as usize
@@ -322,12 +321,32 @@ fn decode_literal_header(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, b
 /// Safe copy for literals with bounds checking
 #[inline(always)]
 fn copy_literals(dst: &mut [u8], d: &mut usize, src: &[u8], s: &mut usize, length: usize) -> Result<()> {
-    if *d + length > dst.len() || *s + length > src.len() {
-        return Err(Error::Corrupt);
+        if *d + length > dst.len() || *s + length > src.len() {
+           return Err(Error::Corrupt);
+           }
+    // Use unsafe slice operations - bounds already validated above
+    unsafe {
+        let src_slice = src.get_unchecked(*s..*s + length);
+        let dst_slice = dst.get_unchecked_mut(*d..*d + length);
+        dst_slice.copy_from_slice(src_slice);
     }
-    dst[*d..*d + length].copy_from_slice(&src[*s..*s + length]);
     *d += length;
     *s += length;
+    Ok(())
+}
+
+/// Fast copy for fused literals (1-4 bytes) - always copy 4 bytes like Go
+#[inline(always)]
+fn copy_fused_literals(dst: &mut [u8], d: &mut usize, src: &[u8], s: &mut usize, length: usize) -> Result<()> {
+    // Fused literals are always 1-4 bytes. Copy 4 bytes unconditionally like Go does.
+    // This is safe because we have guaranteed margins in fast path, and any overwrites
+    // will be corrected by subsequent operations.
+    unsafe {
+        let src_word = std::ptr::read_unaligned(src.as_ptr().add(*s) as *const u32);
+        std::ptr::write_unaligned(dst.as_mut_ptr().add(*d) as *mut u32, src_word);
+    }
+    *d += length;  // Only advance by actual length
+    *s += length;  // Only advance by actual length
     Ok(())
 }
 
@@ -346,19 +365,20 @@ fn copy_match(dst: &mut [u8], d: &mut usize, offset: usize, length: usize) -> Re
         return Err(Error::Corrupt);
     }
 
-    // Check destination bounds
-    if *d + length > dst.len() {
-        return Err(Error::Corrupt);
-    }
-
     let src_start = *d - offset;
     if offset >= length {
-        // No overlap - can use fast copy
-        dst.copy_within(src_start..src_start + length, *d);
+        // No overlap - can use fast unsafe copy
+        unsafe {
+            let src_ptr = dst.as_ptr().add(src_start);
+            let dst_ptr = dst.as_mut_ptr().add(*d);
+            std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, length);
+        }
     } else {
-        // Overlapping copy - byte by byte
+        // Overlapping copy - byte by byte with unsafe access
         for i in 0..length {
-            dst[*d + i] = dst[src_start + i];
+            unsafe {
+                *dst.get_unchecked_mut(*d + i) = *dst.get_unchecked(src_start + i);
+            }
         }
     }
     *d += length;
