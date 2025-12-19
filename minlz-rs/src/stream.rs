@@ -10,14 +10,14 @@ use crate::Error;
 pub const MAGIC_CHUNK: &[u8] = b"\xff\x06\x00\x00MinLz";
 
 /// Chunk type constants according to SPEC.md
-pub const CHUNK_TYPE_LEGACY_COMPRESSED: u8 = 0x00;
+pub const _CHUNK_TYPE_LEGACY_COMPRESSED: u8 = 0x00;
 pub const CHUNK_TYPE_UNCOMPRESSED: u8 = 0x01;
 pub const CHUNK_TYPE_MINLZ_COMPRESSED: u8 = 0x02;
-pub const CHUNK_TYPE_MINLZ_COMPRESSED_CRC: u8 = 0x03;
+pub const _CHUNK_TYPE_MINLZ_COMPRESSED_CRC: u8 = 0x03;
 pub const CHUNK_TYPE_EOF: u8 = 0x20;
-pub const CHUNK_TYPE_INDEX: u8 = 0x40;
+pub const _CHUNK_TYPE_INDEX: u8 = 0x40;
 pub const CHUNK_TYPE_PADDING: u8 = 0xfe;
-pub const CHUNK_TYPE_STREAM_IDENTIFIER: u8 = 0xff;
+pub const _CHUNK_TYPE_STREAM_IDENTIFIER: u8 = 0xff;
 
 /// User-defined chunk ranges
 pub const MIN_USER_SKIPPABLE_CHUNK: u8 = 0x80;
@@ -26,7 +26,7 @@ pub const MIN_USER_NON_SKIPPABLE_CHUNK: u8 = 0xc0;
 pub const MAX_USER_NON_SKIPPABLE_CHUNK: u8 = 0xfd;
 
 /// Stream format size constants
-pub const DEFAULT_BLOCK_SIZE: usize = 2 << 20; // 2MB
+pub const _DEFAULT_BLOCK_SIZE: usize = 2 << 20; // 2MB
 pub const MAX_BLOCK_SIZE: usize = 8 << 20; // 8MB
 pub const MIN_BLOCK_SIZE: usize = 4 << 10; // 4KB
 pub const CHUNK_HEADER_SIZE: usize = 4;
@@ -37,9 +37,9 @@ pub const OUTPUT_BUFFER_HEADER_SIZE: usize = CHUNK_HEADER_SIZE + CHECKSUM_SIZE;
 pub const MAX_USER_CHUNK_SIZE: usize = (1 << 24) - 1; // 16777215
 
 /// Magic body variants for compatibility
-pub const MAGIC_BODY_MINLZ: &str = "MinLz";
-pub const MAGIC_BODY_S2: &str = "S2sTwO";
-pub const MAGIC_BODY_SNAPPY: &str = "sNaPpY";
+pub const _MAGIC_BODY_MINLZ: &str = "MinLz";
+pub const _MAGIC_BODY_S2: &str = "S2sTwO";
+pub const _MAGIC_BODY_SNAPPY: &str = "sNaPpY";
 
 /// Calculate CRC32C checksum with MinLZ masking
 ///
@@ -55,7 +55,7 @@ pub fn crc32_minlz(data: &[u8]) -> u32 {
 }
 
 // Try to implement CRC32C exactly like Go does
-fn calculate_crc32c_like_go(data: &[u8]) -> u32 {
+fn _calculate_crc32c_like_go(data: &[u8]) -> u32 {
     // Go's Castagnoli polynomial: 0x82f63b78
     // Let's try using crc32fast but with explicit configuration
     use crc32fast::Hasher;
@@ -207,7 +207,7 @@ mod tests {
         // This should be equivalent to standard CRC32C with polynomial 0x82F63B78 (Castagnoli)
 
         // Let's try a custom implementation that exactly matches Go
-        let go_style_crc = calculate_crc32c_like_go(test_data);
+        let go_style_crc = _calculate_crc32c_like_go(test_data);
         println!("Go-style CRC32C: {} (0x{:08x})", go_style_crc, go_style_crc);
 
         // Debug step by step exactly like Go

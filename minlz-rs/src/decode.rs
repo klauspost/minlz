@@ -107,6 +107,7 @@ pub fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
     let mut s = 0; // source position
     let mut offset = 1; // last copy offset for repeats
 
+
     // Fast path - decode with margin for bounds checking
     while s + 11 < src.len() && d + 11 < dst.len() {
         let tag = unsafe { *src.get_unchecked(s) };
@@ -230,12 +231,8 @@ pub fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
             TAG_LITERAL => {
                 let (length, repeat) = decode_literal_header(src, &mut s, tag)?;
                 if repeat {
-                    copy_repeat_safe(dst, &mut d, offset, length)?;
+                    copy_match(dst, &mut d, offset, length)?;
                 } else {
-                    if false {
-                        println!("SLOW PATH: {}: (literals), length: {}... [d-after: {} s-after:{}]",
-                                d, length, d + length, s + length);
-                    }
                     copy_literals_safe(dst, &mut d, src, &mut s, length)?;
                 }
             }
@@ -243,13 +240,13 @@ pub fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
             TAG_COPY1 => {
                 let (new_offset, length) = decode_copy1_safe(src, &mut s, tag)?;
                 offset = new_offset;
-                copy_match_safe(dst, &mut d, offset, length)?;
+                copy_match(dst, &mut d, offset, length)?;
             }
 
             TAG_COPY2 => {
                 let (new_offset, length) = decode_copy2_safe(src, &mut s, tag)?;
                 offset = new_offset;
-                copy_match_safe(dst, &mut d, offset, length)?;
+                copy_match(dst, &mut d, offset, length)?;
             }
 
             _ => {
@@ -261,7 +258,7 @@ pub fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                         copy_literals_safe(dst, &mut d, src, &mut s, lit_len)?;
                     }
                     offset = new_offset;
-                    copy_match_safe(dst, &mut d, offset, length)?;
+                    copy_match(dst, &mut d, offset, length)?;
                 } else {
                     // Copy3
                     let (new_offset, length, lit_len) = decode_copy3_safe(src, &mut s, tag)?;
@@ -269,7 +266,7 @@ pub fn minlz_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                         copy_literals_safe(dst, &mut d, src, &mut s, lit_len)?;
                     }
                     offset = new_offset;
-                    copy_match_safe(dst, &mut d, offset, length)?;
+                    copy_match(dst, &mut d, offset, length)?;
                 }
             }
         }
@@ -377,36 +374,35 @@ fn copy_match(dst: &mut [u8], d: &mut usize, offset: usize, length: usize) -> Re
 
     let src_start = *d - offset;
 
-    if offset >= length {
-        // No overlap - can use fast unsafe copy
+    if offset > length {
+        // No overlap - can use fast copy
         unsafe {
             let src_ptr = dst.as_ptr().add(src_start);
             let dst_ptr = dst.as_mut_ptr().add(*d);
             std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, length);
         }
     } else {
-        // Overlapping copy - use memmove which handles overlaps correctly
+        // Overlapping copy - need byte-by-byte forward copy for RLE-style repetition
+        // This is critical for LZ77 decompression where we want to repeat patterns
+        // We can't use std::ptr::copy because it's like memmove and doesn't handle
+        // the incremental pattern repetition needed for LZ77
+        //
+        // Unlike the built-in copy, this byte-by-byte copy always runs
+        // forwards, even if the slices overlap. This allows newly copied
+        // bytes to be used as source for later bytes (RLE-style).
         unsafe {
-            let src_ptr = dst.as_ptr().add(src_start);
             let dst_ptr = dst.as_mut_ptr().add(*d);
-            std::ptr::copy(src_ptr, dst_ptr, length);
+            let src_ptr = dst.as_ptr().add(src_start);
+
+            for i in 0..length {
+                *dst_ptr.add(i) = *src_ptr.add(i);
+            }
         }
     }
     *d += length;
     Ok(())
 }
 
-/// Safe copy for matches (with bounds checking)
-fn copy_match_safe(dst: &mut [u8], d: &mut usize, offset: usize, length: usize) -> Result<()> {
-
-    if *d < offset {
-        return Err(Error::Corrupt);
-    }
-    if *d + length > dst.len() {
-        return Err(Error::Corrupt);
-    }
-    copy_match(dst, d, offset, length)
-}
 
 /// Copy using last offset (repeat)
 #[inline(always)]
@@ -414,10 +410,6 @@ fn copy_repeat(dst: &mut [u8], d: &mut usize, offset: usize, length: usize) -> R
     copy_match(dst, d, offset, length)
 }
 
-/// Safe copy using last offset (repeat)
-fn copy_repeat_safe(dst: &mut [u8], d: &mut usize, offset: usize, length: usize) -> Result<()> {
-    copy_match_safe(dst, d, offset, length)
-}
 
 // Placeholder implementations for copy decoders - these need to be implemented
 // following the SPEC.md format exactly

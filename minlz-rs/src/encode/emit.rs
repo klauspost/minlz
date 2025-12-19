@@ -199,8 +199,6 @@ pub fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> 
     debug_assert!(offset > 0 && offset <= MAX_COPY3_OFFSET,
                   "Copy offset must be in range 1-{}", MAX_COPY3_OFFSET);
 
-    // Debug: Print emit_copy calls for comparison with mz.exe block-debug
-    println!("EMIT_COPY: offset={}, length={}", offset, length);
 
     let result = match offset {
         o if o > MAX_COPY2_OFFSET => {
@@ -247,15 +245,6 @@ pub fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> 
     };
 
     // Debug: Print result and raw bytes written
-    match &result {
-        Ok(bytes_written) => {
-            println!("  -> wrote {} bytes: {:02x?}", bytes_written, &dst[..*bytes_written]);
-        }
-        Err(e) => {
-            println!("  -> ERROR: {:?}", e);
-        }
-    }
-
     result
 }
 

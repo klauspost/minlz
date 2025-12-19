@@ -9,7 +9,7 @@ use crate::{varint, Error, Result};
 pub const INDEX_HEADER: &[u8] = b"s2idx\x00";
 
 /// Index trailer magic bytes
-pub const INDEX_TRAILER: &[u8] = b"\x00xdi2s";
+pub const _INDEX_TRAILER: &[u8] = b"\x00xdi2s";
 
 /// Maximum number of entries in an index
 pub const MAX_INDEX_ENTRIES: usize = 1 << 16;

@@ -42,10 +42,10 @@ pub struct Writer<W: Write> {
     // Configuration
     block_size: usize,
     level: i32,
-    concurrency: usize,
+    _concurrency: usize,
     flush_on_write: bool,
-    generate_index: bool,
-    append_index: bool,
+    _generate_index: bool,
+    _append_index: bool,
     padding: Option<usize>,
 
     // Stream state
@@ -61,10 +61,10 @@ pub struct Writer<W: Write> {
 
     // Parallel compression
     compression_pool: Option<CompressionPool>,
-    pending_blocks: Vec<Vec<u8>>,
+    _pending_blocks: Vec<Vec<u8>>,
 
     // Buffer management
-    output_buffer_size: usize,
+    _output_buffer_size: usize,
 }
 
 impl<W: Write> Writer<W> {
@@ -627,18 +627,18 @@ impl<W: Write> WriterBuilder<W> {
             input_buffer: Vec::with_capacity(self.block_size),
             block_size: self.block_size,
             level: self.level,
-            concurrency: self.concurrency,
+            _concurrency: self.concurrency,
             flush_on_write: self.flush_on_write,
-            generate_index: self.generate_index,
-            append_index: self.append_index,
+            _generate_index: self.generate_index,
+            _append_index: self.append_index,
             padding: self.padding,
             wrote_stream_header: false,
             closed: false,
             uncompressed_written: 0,
             compressed_written: 0,
             compression_pool,
-            pending_blocks: Vec::new(),
-            output_buffer_size,
+            _pending_blocks: Vec::new(),
+            _output_buffer_size: output_buffer_size,
         })
     }
 }
