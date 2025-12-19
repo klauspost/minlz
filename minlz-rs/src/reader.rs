@@ -4,7 +4,7 @@
 //! the Writer. It handles the MinLZ stream format including headers, chunks, user chunks,
 //! and provides a standard io::Read interface.
 
-use crate::{decode, stream, Error, Result};
+use crate::{stream, Error, Result};
 use std::io::{self, Read};
 
 /// State of the reader
@@ -257,45 +257,34 @@ impl<R: Read> Reader<R> {
 
         // Per SPEC 4.4: MinLZ compressed data (chunk type 0x02) contains
         // "A MinLZ block *without* the MinLZ identifier (initial 0 byte)"
-        // The compressed_data already contains: [varint_uncompressed_size] + [minlz_instructions]
-        // So we need to prepend the 0x00 byte before decoding
-        let mut full_block = Vec::with_capacity(compressed_data.len() + 1);
-        full_block.push(0x00); // Add the missing MinLZ identifier
-        full_block.extend_from_slice(compressed_data);
+        // The compressed_data contains: [varint_uncompressed_size] + [minlz_instructions]
 
-        // Decompress the complete MinLZ block
-        let mut decompressed = Vec::new();
-        match decode(&mut decompressed, &full_block) {
-            Ok(()) => {}
-            Err(e) => {
-                // Check if this might be uncompressed data stored directly in a type=2 chunk
-                // This can happen when Go's encoder determines compression would make data larger
-                if let Some(uncompressed_len) = try_extract_uncompressed_from_type2(&full_block) {
-                    // Skip the varint header and treat the rest as literal data
-                    let (_varint_value, varint_len) =
-                        crate::varint::decode_uvarint(&full_block[1..])?;
-                    let literal_data = &full_block[1 + varint_len..];
+        // Parse the varint to get uncompressed size and instruction start position
+        let (uncompressed_size, varint_bytes) = match crate::varint::decode_uvarint(compressed_data) {
+            Ok((size, bytes)) => (size as usize, bytes),
+            Err(_) => return Err(Error::Corrupt),
+        };
 
-                    if literal_data.len() == uncompressed_len {
-                        decompressed.extend_from_slice(literal_data);
-                    } else {
-                        return Err(e);
-                    }
-                } else {
-                    return Err(e);
-                }
-            }
+        // Get the MinLZ instructions (after the varint)
+        if compressed_data.len() < varint_bytes {
+            return Err(Error::Corrupt);
         }
+        let minlz_instructions = &compressed_data[varint_bytes..];
+
+        // Reuse the output buffer, resizing if necessary
+        self.output_buffer.resize(uncompressed_size, 0);
+        crate::decode::minlz_decode(&mut self.output_buffer, minlz_instructions)?;
 
         // Verify CRC32 of the original uncompressed data
-        let calculated_crc = stream::crc32_minlz(&decompressed);
+        let calculated_crc = stream::crc32_minlz(&self.output_buffer);
 
         if calculated_crc != stored_crc {
             return Err(Error::Corrupt);
         }
 
-        // Add to output buffer
-        self.output_buffer.extend_from_slice(&decompressed);
+        // Data is already in output_buffer from minlz_decode
+        // Reset position to start of new data
+        self.output_pos = 0;
 
         Ok(true)
     }
@@ -373,53 +362,6 @@ impl<R: Read> Read for Reader<R> {
     }
 }
 
-/// Try to detect if a type=2 chunk contains uncompressed data instead of MinLZ instructions.
-/// This can happen when Go's encoder determines compression would make data larger.
-/// Returns Some(uncompressed_len) if detected, None otherwise.
-fn try_extract_uncompressed_from_type2(full_block: &[u8]) -> Option<usize> {
-    // full_block format: [0x00, varint_bytes..., data...]
-    if full_block.len() < 2 || full_block[0] != 0x00 {
-        return None;
-    }
-
-    // Try to decode the varint after the 0x00 prefix
-    if let Ok((varint_value, varint_len)) = crate::varint::decode_uvarint(&full_block[1..]) {
-        let data_start = 1 + varint_len;
-        let remaining_data_len = full_block.len() - data_start;
-
-        // Check if this looks like uncompressed data:
-        // 1. The remaining data length should match the varint value (indicating no compression)
-        // 2. The data should not start with valid MinLZ instruction patterns
-        if remaining_data_len == varint_value as usize {
-            // Additional validation: check if the data looks like text/binary content
-            // rather than MinLZ instruction sequences
-            if data_start < full_block.len() {
-                let first_few_bytes =
-                    &full_block[data_start..data_start.min(full_block.len()).min(data_start + 16)];
-
-                // MinLZ instructions typically have specific patterns for tags (0-4)
-                // If we see mostly printable ASCII or other non-instruction patterns,
-                // it's likely uncompressed data
-                let non_instruction_like = first_few_bytes
-                    .iter()
-                    .take(8) // Check first 8 bytes
-                    .filter(|&&b| {
-                        // Not typical MinLZ instruction bytes
-                        b > 31 && b < 127 || // Printable ASCII
-                        b == 0 || b == 255 // Common data bytes
-                    })
-                    .count();
-
-                if non_instruction_like >= 4 {
-                    // More than half look like data, not instructions
-                    return Some(varint_value as usize);
-                }
-            }
-        }
-    }
-
-    None
-}
 
 #[cfg(test)]
 mod tests {
