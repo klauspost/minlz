@@ -162,7 +162,7 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
         }
 
         // Found a 4-byte match, extend it forward
-        let base = s;
+        let mut base = s;
         repeat = base - candidate;
 
         // Extend the match
@@ -180,6 +180,7 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
         }
 
         let length = s - base;
+
 
         // Emit literals and copy
         if next_emit != base {
@@ -199,9 +200,11 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             d += emit_copy(&mut dst[d..], repeat, length)?;
         }
 
+        // Update next_emit after emitting copy
+        next_emit = s;
+
         // Look for immediate matches
         loop {
-            next_emit = s;
             if s >= s_limit {
                 // Emit remainder
                 if next_emit < src.len() {
@@ -234,7 +237,7 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             }
 
             repeat = s - candidate;
-            let base = s;
+            base = s;
             s += 4;
             candidate += 4;
 
@@ -249,6 +252,7 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             }
 
             d += emit_copy(&mut dst[d..], repeat, s - base)?;
+            next_emit = s;
         }
     }
 }
@@ -375,7 +379,7 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             s -= 1;
         }
 
-        let base = s;
+        let mut base = s;
         repeat = base - candidate;
 
         // Extend forward
@@ -409,9 +413,11 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             d += emit_copy(&mut dst[d..], repeat, length)?;
         }
 
+        // Update next_emit after emitting copy
+        next_emit = s;
+
         // Look for immediate matches
         loop {
-            next_emit = s;
             if s >= s_limit {
                 // Emit remainder
                 if next_emit < src.len() {
@@ -443,7 +449,7 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             }
 
             repeat = s - candidate;
-            let base = s;
+            base = s;
             s += 4;
             candidate += 4;
 
@@ -458,6 +464,7 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             }
 
             d += emit_copy(&mut dst[d..], repeat, s - base)?;
+            next_emit = s;
         }
     }
 }

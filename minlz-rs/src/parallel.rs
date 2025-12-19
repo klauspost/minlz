@@ -3,7 +3,7 @@
 //! This module implements multi-threaded block compression using background worker threads
 //! and channels for communication. It maintains output order while allowing parallel processing.
 
-use crate::{encode, Error, Result};
+use crate::{Error, Result};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -249,15 +249,44 @@ impl CompressionPool {
                 }
             };
 
-            // Compress the data
-            let mut compressed = Vec::new();
-            let compression_result = encode(&mut compressed, &job.data, job.level);
+            // Compress the data using block-level compression (not stream-level)
+            // Allocate buffer with sufficient space like sequential writer does
+            let mut compressed = vec![0u8; job.data.len() + 1024]; // Extra space for compression
+            let compression_result = match job.level {
+                1 => crate::encode::level1::encode_block(&mut compressed, &job.data),
+                2 => crate::encode::level2::encode_block(&mut compressed, &job.data),
+                3 => crate::encode::level3::encode_block(&mut compressed, &job.data),
+                _ => crate::encode::level1::encode_block(&mut compressed, &job.data), // Default to level 1
+            };
 
-            let result = CompressionResult {
-                sequence: job.sequence,
-                compressed,
-                original_data: job.data.clone(),
-                error: compression_result.err(),
+            let result = match compression_result {
+                Ok(compressed_len) => {
+                    if compressed_len == 0 {
+                        // Compression failed or wasn't beneficial - handle as uncompressed
+                        CompressionResult {
+                            sequence: job.sequence,
+                            compressed: Vec::new(), // Empty indicates uncompressed
+                            original_data: job.data.clone(),
+                            error: None,
+                        }
+                    } else {
+                        compressed.truncate(compressed_len);
+                        CompressionResult {
+                            sequence: job.sequence,
+                            compressed,
+                            original_data: job.data.clone(),
+                            error: None,
+                        }
+                    }
+                },
+                Err(e) => {
+                    CompressionResult {
+                        sequence: job.sequence,
+                        compressed: Vec::new(),
+                        original_data: job.data.clone(),
+                        error: Some(e),
+                    }
+                }
             };
 
             // Send result back
@@ -323,9 +352,9 @@ mod tests {
     fn test_compression_pool_basic() {
         let mut pool = CompressionPool::new(2).unwrap();
 
-        // Submit some jobs
-        let data1 = b"Hello, world! This is test data.".to_vec();
-        let data2 = b"More test data for compression.".to_vec();
+        // Submit some jobs with larger data that will compress successfully
+        let data1 = vec![b'A'; 100]; // Repetitive data that will compress well
+        let data2 = vec![b'B'; 100]; // Repetitive data that will compress well
 
         let seq1 = pool.compress_block(data1.clone(), 1).unwrap();
         let seq2 = pool.compress_block(data2.clone(), 1).unwrap();
@@ -344,18 +373,34 @@ mod tests {
         // Check original data
         assert_eq!(results[0].1, data1);
         assert_eq!(results[1].1, data2);
+
+        // Test round-trip decompression by creating complete MinLZ blocks
+        for (i, (compressed_data, original_data)) in results.iter().enumerate() {
+            // Create complete MinLZ block: 0x00 + varint(original_len) + compressed_data
+            let mut complete_block = Vec::new();
+            complete_block.push(0x00); // MinLZ block identifier
+            crate::varint::encode_uvarint_vec(&mut complete_block, original_data.len() as u64).unwrap();
+            complete_block.extend_from_slice(compressed_data);
+
+            let mut decompressed = Vec::new();
+            crate::decode::decode(&mut decompressed, &complete_block).unwrap();
+            assert_eq!(&decompressed, original_data, "Round-trip failed for result {}", i);
+        }
     }
 
     #[test]
     fn test_compression_pool_order() {
         let mut pool = CompressionPool::new(4).unwrap();
 
-        // Submit multiple jobs quickly
+        // Submit multiple jobs quickly with data that will compress well
         let mut sequences = Vec::new();
+        let mut original_data = Vec::new();
         for i in 0..10 {
-            let data = format!("Test data {}", i).into_bytes();
-            let seq = pool.compress_block(data, 1).unwrap();
+            // Create repetitive data that will compress successfully
+            let data = vec![(i as u8 + b'A') % 26 + b'A'; 50]; // 50 bytes of same character
+            let seq = pool.compress_block(data.clone(), 1).unwrap();
             sequences.push(seq);
+            original_data.push(data);
         }
 
         // Verify sequence numbers are in order
@@ -366,6 +411,25 @@ mod tests {
         // Get all results
         let results = pool.finish().unwrap();
         assert_eq!(results.len(), 10);
+
+        // Test round-trip decompression for all results
+        for (i, (compressed_data, original_result)) in results.iter().enumerate() {
+            // Verify original data matches
+            assert_eq!(original_result, &original_data[i]);
+
+            // Test decompression by creating complete MinLZ blocks
+            if !compressed_data.is_empty() {
+                // Create complete MinLZ block: 0x00 + varint(original_len) + compressed_data
+                let mut complete_block = Vec::new();
+                complete_block.push(0x00); // MinLZ block identifier
+                crate::varint::encode_uvarint_vec(&mut complete_block, original_result.len() as u64).unwrap();
+                complete_block.extend_from_slice(compressed_data);
+
+                let mut decompressed = Vec::new();
+                crate::decode::decode(&mut decompressed, &complete_block).unwrap();
+                assert_eq!(&decompressed, original_result, "Round-trip failed for result {}", i);
+            }
+        }
     }
 
     #[test]
@@ -394,7 +458,7 @@ mod tests {
     fn test_compression_pool_single_thread() {
         let mut pool = CompressionPool::new(1).unwrap();
 
-        let data = b"Single threaded test data".to_vec();
+        let data = vec![b'X'; 100]; // Repetitive data that will compress successfully
         let data_len = data.len();
         pool.compress_block(data, 2).unwrap();
 
@@ -402,6 +466,16 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(!results[0].0.is_empty());
         assert_eq!(results[0].1.len(), data_len);
+
+        // Test round-trip decompression by creating complete MinLZ block
+        let mut complete_block = Vec::new();
+        complete_block.push(0x00); // MinLZ block identifier
+        crate::varint::encode_uvarint_vec(&mut complete_block, results[0].1.len() as u64).unwrap();
+        complete_block.extend_from_slice(&results[0].0);
+
+        let mut decompressed = Vec::new();
+        crate::decode::decode(&mut decompressed, &complete_block).unwrap();
+        assert_eq!(decompressed, results[0].1);
     }
 
     #[test]
@@ -411,5 +485,58 @@ mod tests {
         // No jobs submitted
         let results = pool.finish().unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_compression_pool_uncompressible_data() {
+        let mut pool = CompressionPool::new(2).unwrap();
+
+        // Submit data that won't compress well (should return empty compressed data)
+        let data = b"Small text".to_vec(); // Small text that won't compress effectively
+        let seq = pool.compress_block(data.clone(), 1).unwrap();
+        assert_eq!(seq, 0);
+
+        let results = pool.finish().unwrap();
+        assert_eq!(results.len(), 1);
+
+        // For uncompressible data, compressed result should be empty
+        assert!(results[0].0.is_empty());
+        // Original data should be preserved
+        assert_eq!(results[0].1, data);
+
+        // This represents data that should be stored uncompressed in the actual writer
+    }
+
+    #[test]
+    fn test_compression_pool_mixed_data() {
+        let mut pool = CompressionPool::new(2).unwrap();
+
+        // Mix of compressible and uncompressible data
+        let compressible = vec![b'Z'; 100]; // Will compress
+        let uncompressible = b"Mixed data".to_vec(); // Won't compress well
+
+        pool.compress_block(compressible.clone(), 1).unwrap();
+        pool.compress_block(uncompressible.clone(), 1).unwrap();
+
+        let results = pool.finish().unwrap();
+        assert_eq!(results.len(), 2);
+
+        // First result should have compressed data
+        assert!(!results[0].0.is_empty());
+        assert_eq!(results[0].1, compressible);
+
+        // Verify round-trip for compressed data by creating complete MinLZ block
+        let mut complete_block = Vec::new();
+        complete_block.push(0x00); // MinLZ block identifier
+        crate::varint::encode_uvarint_vec(&mut complete_block, compressible.len() as u64).unwrap();
+        complete_block.extend_from_slice(&results[0].0);
+
+        let mut decompressed = Vec::new();
+        crate::decode::decode(&mut decompressed, &complete_block).unwrap();
+        assert_eq!(decompressed, compressible);
+
+        // Second result should have empty compressed data (uncompressible)
+        assert!(results[1].0.is_empty());
+        assert_eq!(results[1].1, uncompressible);
     }
 }

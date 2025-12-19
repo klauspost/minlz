@@ -6,6 +6,9 @@ pub mod level1;
 pub mod level2;
 pub mod level3;
 
+#[cfg(test)]
+mod emit_validation_tests;
+
 use crate::{
     constants::*,
     error::{Error, Result},

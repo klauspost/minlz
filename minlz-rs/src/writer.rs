@@ -304,14 +304,23 @@ impl<W: Write> Writer<W> {
     /// Write pre-compressed data as a chunk
     fn write_compressed_data(&mut self, compressed_data: Vec<u8>, original_data: &[u8]) -> Result<()> {
         if let Some(ref mut writer) = self.writer {
-            // The data is already compressed by the parallel compression pool
-            let chunk_type = CHUNK_TYPE_MINLZ_COMPRESSED;
-
             // Calculate checksum for the original uncompressed data (MinLZ format requirement)
             let checksum = crc32_minlz(original_data);
 
+            // Determine chunk type and prepare data based on compression result
+            let (chunk_type, final_buffer) = if compressed_data.is_empty() {
+                // Compression failed or wasn't beneficial - store as uncompressed
+                (CHUNK_TYPE_UNCOMPRESSED, original_data.to_vec())
+            } else {
+                // Compression succeeded - prepare with varint length + compressed data
+                let mut buffer = Vec::new();
+                let _varint_len = crate::varint::encode_uvarint_vec(&mut buffer, original_data.len() as u64)?;
+                buffer.extend_from_slice(&compressed_data);
+                (CHUNK_TYPE_MINLZ_COMPRESSED, buffer)
+            };
+
             // Calculate chunk data length (checksum + data)
-            let chunk_data_len = CHECKSUM_SIZE + compressed_data.len();
+            let chunk_data_len = CHECKSUM_SIZE + final_buffer.len();
 
             // Write chunk header
             let mut header = [0u8; CHUNK_HEADER_SIZE];
@@ -323,8 +332,8 @@ impl<W: Write> Writer<W> {
             write_checksum(&mut checksum_bytes, checksum)?;
             writer.write_all(&checksum_bytes)?;
 
-            // Write compressed data
-            writer.write_all(&compressed_data)?;
+            // Write data
+            writer.write_all(&final_buffer)?;
 
             // Update statistics
             self.uncompressed_written += original_data.len() as u64;

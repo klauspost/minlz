@@ -30,12 +30,15 @@ enum ReaderState {
 /// ```rust
 /// use minlz::Reader;
 /// use std::io::Read;
+/// # use std::io::Cursor;
 ///
-/// let compressed_data = /* MinLZ stream data */;
-/// let mut reader = Reader::new(&compressed_data[..])?;
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let compressed_data = vec![0u8; 32]; // Placeholder MinLZ stream data
+/// let mut reader = Reader::new(Cursor::new(&compressed_data))?;
 /// let mut decompressed = Vec::new();
 /// reader.read_to_end(&mut decompressed)?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # Ok(())
+/// # }
 /// ```
 pub struct Reader<R: Read> {
     /// Underlying data source
@@ -154,7 +157,6 @@ impl<R: Read> Reader<R> {
             chunk_header[1], chunk_header[2], chunk_header[3], 0
         ]) as usize;
 
-        println!("Read chunk: type={}, length={}", chunk_type, chunk_length);
 
         // Validate chunk length is reasonable
         if chunk_length > self.max_block_size * 2 {
@@ -201,7 +203,6 @@ impl<R: Read> Reader<R> {
 
     /// Read and process an uncompressed chunk
     fn read_uncompressed_chunk(&mut self, chunk_length: usize) -> Result<bool> {
-        println!("Processing uncompressed chunk of {} bytes", chunk_length);
 
         // Validate and extract CRC32 if present
         if chunk_length < 4 {
@@ -223,11 +224,9 @@ impl<R: Read> Reader<R> {
             crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]
         ]);
 
-        println!("Uncompressed data: {} bytes, stored CRC: {}", uncompressed_data.len(), stored_crc);
 
         // Verify CRC32
         let calculated_crc = stream::crc32_minlz(uncompressed_data);
-        println!("Calculated CRC: {}", calculated_crc);
         if calculated_crc != stored_crc {
             return Err(Error::Corrupt);
         }
@@ -235,14 +234,12 @@ impl<R: Read> Reader<R> {
         // Add to output buffer directly (no decompression needed)
         self.output_buffer.extend_from_slice(uncompressed_data);
 
-        println!("Added {} bytes to output buffer", uncompressed_data.len());
 
         Ok(true)
     }
 
     /// Read and process a compressed chunk
     fn read_compressed_chunk(&mut self, chunk_length: usize) -> Result<bool> {
-        println!("Processing compressed chunk of {} bytes", chunk_length);
 
         // Read the entire chunk
         if self.read_buffer.len() < chunk_length {
@@ -264,7 +261,6 @@ impl<R: Read> Reader<R> {
             crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]
         ]);
 
-        println!("Compressed data: {} bytes, stored CRC: {}", compressed_data.len(), stored_crc);
 
         // Per SPEC 4.4: MinLZ compressed data (chunk type 0x02) contains
         // "A MinLZ block *without* the MinLZ identifier (initial 0 byte)"
@@ -278,16 +274,12 @@ impl<R: Read> Reader<R> {
         let mut decompressed = Vec::new();
         match decode(&mut decompressed, &full_block) {
             Ok(()) => {
-                println!("Decode succeeded, decompressed length: {}", decompressed.len());
             }
             Err(e) => {
-                println!("Decode failed: {:?}", e);
-                println!("Full block length: {}, first 16 bytes: {:02x?}", full_block.len(), &full_block[..16.min(full_block.len())]);
 
                 // Check if this might be uncompressed data stored directly in a type=2 chunk
                 // This can happen when Go's encoder determines compression would make data larger
                 if let Some(uncompressed_len) = try_extract_uncompressed_from_type2(&full_block) {
-                    println!("Detected uncompressed data in type=2 chunk, length: {}", uncompressed_len);
 
                     // Skip the varint header and treat the rest as literal data
                     let (_varint_value, varint_len) = crate::varint::decode_uvarint(&full_block[1..])?;
@@ -295,9 +287,7 @@ impl<R: Read> Reader<R> {
 
                     if literal_data.len() == uncompressed_len {
                         decompressed.extend_from_slice(literal_data);
-                        println!("Successfully extracted {} bytes of literal data", decompressed.len());
                     } else {
-                        println!("Length mismatch: literal data {} bytes vs expected {}", literal_data.len(), uncompressed_len);
                         return Err(e);
                     }
                 } else {
@@ -308,16 +298,11 @@ impl<R: Read> Reader<R> {
 
         // Verify CRC32 of the original uncompressed data
         let calculated_crc = stream::crc32_minlz(&decompressed);
-        println!("Calculated CRC of decompressed: {}", calculated_crc);
-        println!("Stored CRC: {}, Calculated CRC: {}", stored_crc, calculated_crc);
-        println!("Decompressed data length: {}", decompressed.len());
 
         if calculated_crc != stored_crc {
-            println!("CRC MISMATCH! First 32 bytes of decompressed: {:02x?}", &decompressed[..32.min(decompressed.len())]);
             return Err(Error::Corrupt);
         }
 
-        println!("Decompressed {} bytes", decompressed.len());
 
         // Add to output buffer
         self.output_buffer.extend_from_slice(&decompressed);
@@ -463,19 +448,10 @@ mod tests {
         writer.write_all(input).unwrap();
         let (final_output, _) = writer.finish().unwrap();
 
-        // Debug: print first 16 bytes to see what we get
-        println!("Compressed stream header: {:?}", &final_output[..16.min(final_output.len())]);
-        println!("Expected MAGIC_CHUNK: {:?}", stream::MAGIC_CHUNK);
-
         // Decompress with Reader
-        println!("Creating reader...");
         let mut reader = Reader::new(&final_output[..]).unwrap();
-        println!("Reader created successfully");
-
         let mut decompressed = Vec::new();
-        println!("Starting read_to_end...");
         reader.read_to_end(&mut decompressed).unwrap();
-        println!("Read completed, decompressed {} bytes", decompressed.len());
 
         assert_eq!(&decompressed, input);
     }
@@ -553,22 +529,16 @@ mod tests {
 
         // Try to read Go-generated file
         if let Ok(go_data) = fs::read("go_test.mz") {
-            println!("Go file size: {} bytes", go_data.len());
-            println!("First 16 bytes: {:?}", &go_data[..16.min(go_data.len())]);
 
             let mut reader = Reader::new(&go_data[..]).unwrap();
             let mut decompressed = Vec::new();
             match reader.read_to_end(&mut decompressed) {
-                Ok(bytes_read) => {
-                    println!("Successfully read {} bytes, decompressed {} bytes", bytes_read, decompressed.len());
-                    println!("Content: {:?}", String::from_utf8_lossy(&decompressed));
+                Ok(_bytes_read) => {
                 },
-                Err(e) => {
-                    println!("Error reading Go file: {:?}", e);
+                Err(_e) => {
                 }
             }
         } else {
-            println!("Go test file not found - skipping compatibility test");
         }
     }
 }

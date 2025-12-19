@@ -31,24 +31,16 @@ mod error;
 mod memory;
 mod varint;
 mod decode;
-mod encode;
+pub mod encode;
 mod stream;
 mod index;
 mod writer;
 mod reader;
 mod parallel;
 
-#[cfg(test)]
-mod debug_go_block;
 
 #[cfg(test)]
-mod large_file_test;
-
-#[cfg(test)]
-mod decode_benchmark;
-
-#[cfg(test)]
-mod debug_corruption;
+mod decode_validation_tests;
 
 #[cfg(test)]
 mod tests;

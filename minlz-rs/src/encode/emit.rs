@@ -106,7 +106,9 @@ pub fn emit_repeat(dst: &mut [u8], length: usize) -> Result<usize> {
 fn encode_copy3(dst: &mut [u8], offset: usize, length: usize, lits: usize) -> Result<usize> {
     debug_assert!(offset >= 65536, "Copy3 offset must be >= 65536");
 
+
     let length = length.saturating_sub(4);
+
 
     // Encode offset (subtract base to fit in 21 bits)
     let mut encoded = ((offset - 65536) << 11) as u32 | TAG_COPY3 as u32 | ((lits << 3) as u32);
@@ -197,10 +199,10 @@ pub fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> 
     debug_assert!(offset > 0 && offset <= MAX_COPY3_OFFSET,
                   "Copy offset must be in range 1-{}", MAX_COPY3_OFFSET);
 
-    // println!("DEBUG emit_copy: offset={}, length={}, MAX_COPY1_OFFSET={}, MAX_COPY2_OFFSET={}",
-    //     offset, length, MAX_COPY1_OFFSET, MAX_COPY2_OFFSET);
+    // Debug: Print emit_copy calls for comparison with mz.exe block-debug
+    println!("EMIT_COPY: offset={}, length={}", offset, length);
 
-    match offset {
+    let result = match offset {
         o if o > MAX_COPY2_OFFSET => {
             // Use Copy3 for large offsets
             encode_copy3(dst, offset, length, 0)
@@ -242,7 +244,19 @@ pub fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> 
             // Use Copy2 for medium offsets
             encode_copy2(dst, offset, length)
         }
+    };
+
+    // Debug: Print result and raw bytes written
+    match &result {
+        Ok(bytes_written) => {
+            println!("  -> wrote {} bytes: {:02x?}", bytes_written, &dst[..*bytes_written]);
+        }
+        Err(e) => {
+            println!("  -> ERROR: {:?}", e);
+        }
     }
+
+    result
 }
 
 /// Emit a Copy2 operation with embedded literals.
@@ -322,6 +336,7 @@ mod tests {
         assert_eq!(dst[0], 29 << 3 | TAG_REPEAT);
         assert_eq!(dst[1], 70); // 100-30 = 70
     }
+
 
     #[test]
     fn test_emitters() {

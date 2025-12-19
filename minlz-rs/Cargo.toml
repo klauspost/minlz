@@ -34,3 +34,6 @@ harness = false
 [[bin]]
 name = "mz"
 path = "src/bin/mz.rs"
+
+[profile.release]
+debug-assertions = true
