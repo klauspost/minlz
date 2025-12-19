@@ -62,6 +62,7 @@ pub use parallel::{BufferPool, CompressionPool};
 pub use reader::Reader;
 pub use writer::{Writer, WriterBuilder};
 
+
 /// Maximum size of a block that can be compressed/decompressed
 pub const MAX_BLOCK_SIZE: usize = 8 << 20; // 8 MiB
 
@@ -96,3 +97,4 @@ pub fn decoded_len(src: &[u8]) -> Result<usize> {
 pub fn is_minlz(src: &[u8]) -> Result<(bool, usize)> {
     decode::is_minlz(src)
 }
+

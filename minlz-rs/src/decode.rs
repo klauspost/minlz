@@ -18,8 +18,8 @@ pub fn decode(dst: &mut Vec<u8>, src: &[u8]) -> Result<()> {
     }
 
     if !is_mlz {
-        // TODO: Add Snappy/S2 fallback support
-        return Err(Error::Unsupported);
+        // Try Snappy fallback
+        return decode_snappy_fallback(dst, src);
     }
 
     // Ensure dst has enough capacity
@@ -641,4 +641,230 @@ pub fn decode_copy3_safe(src: &[u8], s: &mut usize, tag: u8) -> Result<(usize, u
     };
 
     Ok((offset, length, lit_len))
+}
+
+/// Fallback to Snappy decompression when data is not MinLZ format
+fn decode_snappy_fallback(dst: &mut Vec<u8>, src: &[u8]) -> Result<()> {
+    // Try to decompress as Snappy
+    match snap::raw::Decoder::new().decompress_vec(src) {
+        Ok(decompressed) => {
+            dst.clear();
+            dst.extend_from_slice(&decompressed);
+            Ok(())
+        }
+        Err(_) => {
+            // If Snappy decompression fails, the data format is unsupported
+            Err(Error::Unsupported)
+        }
+    }
+}
+
+#[cfg(test)]
+mod snappy_tests {
+    use super::*;
+
+    #[test]
+    fn test_snappy_fallback() {
+        // Test data
+        let original = b"Hello, world! This is test data for Snappy compression.";
+
+        // Compress with Snappy
+        let snappy_compressed = snap::raw::Encoder::new().compress_vec(original).unwrap();
+
+        // Verify it doesn't start with 0 (so it's not MinLZ)
+        assert_ne!(snappy_compressed[0], 0);
+
+        // Decode through our MinLZ decoder with Snappy fallback
+        let mut decoded = Vec::new();
+        decode(&mut decoded, &snappy_compressed).unwrap();
+
+        // Should match original
+        assert_eq!(&decoded, original);
+    }
+
+    #[test]
+    fn test_minlz_still_works() {
+        // Test that MinLZ compression still works
+        let original = b"Hello, MinLZ world! This should be compressed with MinLZ.";
+
+        // Compress with MinLZ
+        let mut minlz_compressed = Vec::new();
+        crate::encode(&mut minlz_compressed, original, 1).unwrap();
+
+        // Verify it starts with 0 (MinLZ format)
+        assert_eq!(minlz_compressed[0], 0);
+
+        // Decode through our decoder
+        let mut decoded = Vec::new();
+        decode(&mut decoded, &minlz_compressed).unwrap();
+
+        // Should match original
+        assert_eq!(&decoded, original);
+    }
+
+
+    #[test]
+    fn test_unsupported_data() {
+        // Test with binary data that doesn't match any format
+        let binary_data = vec![0xFF, 0xFE, 0xFD, 0xFC, 0x00, 0x01, 0x02, 0x03];
+
+        // Should fail with unsupported error
+        let mut decoded = Vec::new();
+        let result = decode(&mut decoded, &binary_data);
+
+        assert!(result.is_err());
+        if let Err(Error::Unsupported) = result {
+            // Expected
+        } else {
+            panic!("Expected Unsupported error");
+        }
+    }
+
+    #[test]
+    fn test_is_minlz_detection() {
+        // Test with MinLZ data
+        let original = b"Test data for MinLZ compression and format detection.";
+        let mut minlz_compressed = Vec::new();
+        crate::encode(&mut minlz_compressed, original, 1).unwrap();
+
+        // is_minlz should return true for MinLZ data
+        let (is_mlz, decoded_size) = crate::is_minlz(&minlz_compressed).unwrap();
+        assert!(is_mlz, "Should detect MinLZ format");
+        assert_eq!(decoded_size, original.len(), "Should return correct decoded size");
+
+        // Test with Snappy data
+        let snappy_compressed = snap::raw::Encoder::new().compress_vec(original).unwrap();
+
+        // is_minlz should return false for Snappy data
+        let (is_mlz, _) = crate::is_minlz(&snappy_compressed).unwrap();
+        assert!(!is_mlz, "Should not detect Snappy as MinLZ format");
+    }
+
+    #[test]
+    fn test_roundtrip_minlz_all_levels() {
+        let test_data = b"This is test data for round-trip testing across all compression levels.";
+
+        for level in 1..=3 {
+            // Compress with MinLZ
+            let mut compressed = Vec::new();
+            crate::encode(&mut compressed, test_data, level).unwrap();
+
+            // Verify format detection
+            let (is_mlz, decoded_size) = crate::is_minlz(&compressed).unwrap();
+            assert!(is_mlz, "Level {} should produce MinLZ format", level);
+            assert_eq!(decoded_size, test_data.len(), "Level {} decoded size mismatch", level);
+
+            // Verify starts with 0x00
+            assert_eq!(compressed[0], 0, "Level {} should start with 0x00", level);
+
+            // Decode and verify
+            let mut decoded = Vec::new();
+            decode(&mut decoded, &compressed).unwrap();
+            assert_eq!(&decoded, test_data, "Level {} round-trip failed", level);
+        }
+    }
+
+    #[test]
+    fn test_roundtrip_snappy_various_sizes() {
+        let test_cases = vec![
+            b"Small".to_vec(),
+            b"Medium sized test data for Snappy compression".to_vec(),
+            vec![b'X'; 1000], // Repetitive data
+            (0..=255).collect::<Vec<u8>>(), // Non-repetitive data
+        ];
+
+        for (i, test_data) in test_cases.iter().enumerate() {
+            // Compress with Snappy
+            let snappy_compressed = snap::raw::Encoder::new().compress_vec(test_data).unwrap();
+
+            // Verify format detection
+            let (is_mlz, _) = crate::is_minlz(&snappy_compressed).unwrap();
+            assert!(!is_mlz, "Test case {} should not be detected as MinLZ", i);
+
+            // Verify doesn't start with 0x00
+            assert_ne!(snappy_compressed[0], 0, "Test case {} should not start with 0x00", i);
+
+            // Decode through our fallback
+            let mut decoded = Vec::new();
+            decode(&mut decoded, &snappy_compressed).unwrap();
+            assert_eq!(&decoded, test_data, "Test case {} Snappy round-trip failed", i);
+        }
+    }
+
+    #[test]
+    fn test_decoded_len_function() {
+        let test_data = b"Test data for decoded_len function verification.";
+
+        // Test with MinLZ
+        let mut minlz_compressed = Vec::new();
+        crate::encode(&mut minlz_compressed, test_data, 2).unwrap();
+
+        let decoded_size = crate::decoded_len(&minlz_compressed).unwrap();
+        assert_eq!(decoded_size, test_data.len(), "decoded_len should return correct size for MinLZ");
+
+        // Test with Snappy (should also work through fallback detection)
+        let snappy_compressed = snap::raw::Encoder::new().compress_vec(test_data).unwrap();
+        let decoded_size = crate::decoded_len(&snappy_compressed).unwrap();
+        assert_eq!(decoded_size, test_data.len(), "decoded_len should return correct size for Snappy");
+    }
+
+    #[test]
+    fn test_mixed_format_handling() {
+        let test_data = b"Mixed format test data for comprehensive verification.";
+
+        // Create both MinLZ and Snappy compressed versions
+        let mut minlz_compressed = Vec::new();
+        crate::encode(&mut minlz_compressed, test_data, 1).unwrap();
+
+        let snappy_compressed = snap::raw::Encoder::new().compress_vec(test_data).unwrap();
+
+        // Both should decode to the same result
+        let mut minlz_decoded = Vec::new();
+        let mut snappy_decoded = Vec::new();
+
+        decode(&mut minlz_decoded, &minlz_compressed).unwrap();
+        decode(&mut snappy_decoded, &snappy_compressed).unwrap();
+
+        assert_eq!(&minlz_decoded, test_data, "MinLZ decode failed");
+        assert_eq!(&snappy_decoded, test_data, "Snappy decode failed");
+        assert_eq!(minlz_decoded, snappy_decoded, "Both should decode to same result");
+
+        // Verify format detection is correct
+        let (is_minlz_mlz, _) = crate::is_minlz(&minlz_compressed).unwrap();
+        let (is_snappy_mlz, _) = crate::is_minlz(&snappy_compressed).unwrap();
+
+        assert!(is_minlz_mlz, "MinLZ data should be detected as MinLZ");
+        assert!(!is_snappy_mlz, "Snappy data should not be detected as MinLZ");
+    }
+
+    #[test]
+    fn test_edge_cases() {
+        // Test empty data
+        let empty_data = &[];
+        let mut decoded = Vec::new();
+        let result = decode(&mut decoded, empty_data);
+        assert!(result.is_err(), "Empty data should fail");
+
+        // Test single byte (various values)
+        for &byte in &[0x00, 0x01, 0xFF] {
+            let single_byte = &[byte];
+            let mut decoded = Vec::new();
+            let result = decode(&mut decoded, single_byte);
+            // Most single bytes should fail (except specific MinLZ patterns)
+            if byte == 0x00 {
+                // Special case: single 0 byte might be valid MinLZ
+                let _ = result; // Don't assert, just ensure it doesn't panic
+            } else {
+                // Non-zero single bytes should try Snappy and likely fail
+                let _ = result; // Don't assert, just ensure it doesn't panic
+            }
+        }
+
+        // Test data that starts with 0 but isn't valid MinLZ
+        let invalid_minlz = &[0x00, 0xFF, 0xFE, 0xFD];
+        let mut decoded = Vec::new();
+        let result = decode(&mut decoded, invalid_minlz);
+        // Should fail since it's not valid MinLZ format
+        assert!(result.is_err(), "Invalid MinLZ should fail");
+    }
 }
