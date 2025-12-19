@@ -6,7 +6,7 @@
 use crate::{
     constants::*,
     error::Result,
-    memory::{store8, store16, store32},
+    memory::{store16, store32, store8},
 };
 
 /// Writes a literal chunk and returns the number of bytes written.
@@ -29,19 +29,22 @@ pub fn emit_literal(dst: &mut [u8], lit: &[u8]) -> Result<usize> {
             store8(dst, 0, (n as u8) << 3 | TAG_LITERAL)?;
             i = 1;
         }
-        29..=284 => { // 29 + 255
+        29..=284 => {
+            // 29 + 255
             store8(dst, 1, (n - 29) as u8)?;
             store8(dst, 0, 29 << 3 | TAG_LITERAL)?;
             i = 2;
         }
-        285..=65564 => { // 29 + 65535
+        285..=65564 => {
+            // 29 + 65535
             let n = n - 29;
             dst[2] = (n >> 8) as u8;
             dst[1] = n as u8;
             dst[0] = 30 << 3 | TAG_LITERAL;
             i = 3;
         }
-        65565..=16777244 => { // 29 + 16777215
+        65565..=16777244 => {
+            // 29 + 16777215
             let n = n - 29;
             dst[3] = (n >> 16) as u8;
             dst[2] = (n >> 8) as u8;
@@ -73,13 +76,15 @@ pub fn emit_repeat(dst: &mut [u8], length: usize) -> Result<usize> {
             store8(dst, 0, ((length - 1) << 3) as u8 | TAG_REPEAT)?;
             Ok(1)
         }
-        30..286 => { // 30 + 256
+        30..286 => {
+            // 30 + 256
             let length = length - 30;
             store8(dst, 1, length as u8)?;
             store8(dst, 0, 29 << 3 | TAG_REPEAT)?;
             Ok(2)
         }
-        286..65566 => { // 30 + 65536
+        286..65566 => {
+            // 30 + 65536
             let length = length - 30;
             dst[2] = (length >> 8) as u8;
             dst[1] = length as u8;
@@ -106,9 +111,7 @@ pub fn emit_repeat(dst: &mut [u8], length: usize) -> Result<usize> {
 fn encode_copy3(dst: &mut [u8], offset: usize, length: usize, lits: usize) -> Result<usize> {
     debug_assert!(offset >= 65536, "Copy3 offset must be >= 65536");
 
-
     let length = length.saturating_sub(4);
-
 
     // Encode offset (subtract base to fit in 21 bits)
     let mut encoded = ((offset - 65536) << 11) as u32 | TAG_COPY3 as u32 | ((lits << 3) as u32);
@@ -119,14 +122,16 @@ fn encode_copy3(dst: &mut [u8], offset: usize, length: usize, lits: usize) -> Re
             store32(dst, 0, encoded)?;
             Ok(4)
         }
-        61..=316 => { // 60 + 256
+        61..=316 => {
+            // 60 + 256
             let length = length - 60;
             store8(dst, 4, length as u8)?;
             encoded |= 61 << 5;
             store32(dst, 0, encoded)?;
             Ok(5)
         }
-        317..=65596 => { // 60 + 65536
+        317..=65596 => {
+            // 60 + 65536
             let length = length - 60;
             encoded |= 62 << 5;
             dst[5] = (length >> 8) as u8;
@@ -152,8 +157,12 @@ fn encode_copy3(dst: &mut [u8], offset: usize, length: usize, lits: usize) -> Re
 /// - Offset range: 64 to 65535
 /// - Length: minimum 4 bytes
 fn encode_copy2(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> {
-    debug_assert!(offset >= MIN_COPY2_OFFSET && offset <= MAX_COPY2_OFFSET,
-                  "Copy2 offset must be in range {}-{}", MIN_COPY2_OFFSET, MAX_COPY2_OFFSET);
+    debug_assert!(
+        offset >= MIN_COPY2_OFFSET && offset <= MAX_COPY2_OFFSET,
+        "Copy2 offset must be in range {}-{}",
+        MIN_COPY2_OFFSET,
+        MAX_COPY2_OFFSET
+    );
 
     let length = length.saturating_sub(4);
     let offset = offset - MIN_COPY2_OFFSET;
@@ -165,13 +174,15 @@ fn encode_copy2(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> {
             store8(dst, 0, (length << 2) as u8 | TAG_COPY2)?;
             Ok(3)
         }
-        61..=316 => { // 60 + 256
+        61..=316 => {
+            // 60 + 256
             let length = length - 60;
             store8(dst, 3, length as u8)?;
             store8(dst, 0, 61 << 2 | TAG_COPY2)?;
             Ok(4)
         }
-        317..=65596 => { // 60 + 65536
+        317..=65596 => {
+            // 60 + 65536
             let length = length - 60;
             dst[4] = (length >> 8) as u8;
             dst[3] = length as u8;
@@ -196,9 +207,11 @@ fn encode_copy2(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> {
 /// - Medium offsets (64-65535): Copy2 format
 /// - Large offsets (65536+): Copy3 format
 pub fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> {
-    debug_assert!(offset > 0 && offset <= MAX_COPY3_OFFSET,
-                  "Copy offset must be in range 1-{}", MAX_COPY3_OFFSET);
-
+    debug_assert!(
+        offset > 0 && offset <= MAX_COPY3_OFFSET,
+        "Copy offset must be in range 1-{}",
+        MAX_COPY3_OFFSET
+    );
 
     let result = match offset {
         o if o > MAX_COPY2_OFFSET => {
@@ -210,7 +223,8 @@ pub fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> 
             let offset = offset - 1; // Copy1 stores offset-1
 
             match length {
-                4..19 => { // length < 15 + 4
+                4..19 => {
+                    // length < 15 + 4
                     // Copy1 format: bits 0-1=tag(1), bits 2-5=length-4, bits 6-7=offset_low_2_bits
                     let byte1 = ((offset & 0x03) << 6) | ((length - 4) << 2) | TAG_COPY1 as usize;
                     let byte2 = offset >> 2;
@@ -218,7 +232,8 @@ pub fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> 
                     dst[1] = byte2 as u8;
                     Ok(2)
                 }
-                19..274 => { // length < 256 + 18
+                19..274 => {
+                    // length < 256 + 18
                     // Copy1 format with length extension
                     let byte1 = ((offset & 0x03) << 6) | (15 << 2) | TAG_COPY1 as usize;
                     let byte2 = offset >> 2;
@@ -254,9 +269,18 @@ pub fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> Result<usize> 
 /// within a Copy2 operation, saving space when there are small
 /// literal runs before a copy.
 pub fn emit_copy_lits2(dst: &mut [u8], lits: &[u8], offset: usize, length: usize) -> Result<usize> {
-    debug_assert!(lits.len() <= MAX_COPY2_LITS, "Too many literals for Copy2: {} > {}", lits.len(), MAX_COPY2_LITS);
-    debug_assert!(offset >= MIN_COPY2_OFFSET && offset <= MAX_COPY2_OFFSET,
-                  "Copy2 offset must be in range {}-{}", MIN_COPY2_OFFSET, MAX_COPY2_OFFSET);
+    debug_assert!(
+        lits.len() <= MAX_COPY2_LITS,
+        "Too many literals for Copy2: {} > {}",
+        lits.len(),
+        MAX_COPY2_LITS
+    );
+    debug_assert!(
+        offset >= MIN_COPY2_OFFSET && offset <= MAX_COPY2_OFFSET,
+        "Copy2 offset must be in range {}-{}",
+        MIN_COPY2_OFFSET,
+        MAX_COPY2_OFFSET
+    );
 
     let offset = offset - MIN_COPY2_OFFSET;
     let length = length.saturating_sub(4);
@@ -264,14 +288,22 @@ pub fn emit_copy_lits2(dst: &mut [u8], lits: &[u8], offset: usize, length: usize
     if length > COPY2_LIT_MAX_LEN - 4 {
         // Split long copies: emit max length + repeat for remainder
         store16(dst, 1, offset as u16)?;
-        store8(dst, 0, TAG_COPY2_FUSED | ((COPY2_LIT_MAX_LEN - 4) << 5) as u8 | ((lits.len() - 1) << 3) as u8)?;
+        store8(
+            dst,
+            0,
+            TAG_COPY2_FUSED | ((COPY2_LIT_MAX_LEN - 4) << 5) as u8 | ((lits.len() - 1) << 3) as u8,
+        )?;
         dst[3..3 + lits.len()].copy_from_slice(lits);
         let n = 3 + lits.len();
         let repeat_len = emit_repeat(&mut dst[n..], length - (COPY2_LIT_MAX_LEN - 4))?;
         Ok(n + repeat_len)
     } else {
         store16(dst, 1, offset as u16)?;
-        store8(dst, 0, TAG_COPY2_FUSED | (length << 5) as u8 | ((lits.len() - 1) << 3) as u8)?;
+        store8(
+            dst,
+            0,
+            TAG_COPY2_FUSED | (length << 5) as u8 | ((lits.len() - 1) << 3) as u8,
+        )?;
         dst[3..3 + lits.len()].copy_from_slice(lits);
         Ok(3 + lits.len())
     }
@@ -281,8 +313,18 @@ pub fn emit_copy_lits2(dst: &mut [u8], lits: &[u8], offset: usize, length: usize
 ///
 /// Similar to Copy2 but for large offsets, allows 1-3 literals to be embedded.
 pub fn emit_copy_lits3(dst: &mut [u8], lits: &[u8], offset: usize, length: usize) -> Result<usize> {
-    debug_assert!(lits.len() <= MAX_COPY3_LITS, "Too many literals for Copy3: {} > {}", lits.len(), MAX_COPY3_LITS);
-    debug_assert!(offset > MAX_COPY2_OFFSET, "Copy3 offset too small: {} <= {}", offset, MAX_COPY2_OFFSET);
+    debug_assert!(
+        lits.len() <= MAX_COPY3_LITS,
+        "Too many literals for Copy3: {} > {}",
+        lits.len(),
+        MAX_COPY3_LITS
+    );
+    debug_assert!(
+        offset > MAX_COPY2_OFFSET,
+        "Copy3 offset too small: {} <= {}",
+        offset,
+        MAX_COPY2_OFFSET
+    );
 
     let n = encode_copy3(dst, offset, length, lits.len())?;
     dst[n..n + lits.len()].copy_from_slice(lits);
@@ -326,7 +368,6 @@ mod tests {
         assert_eq!(dst[1], 70); // 100-30 = 70
     }
 
-
     #[test]
     fn test_emitters() {
         let mut tmp = [0u8; 11];
@@ -340,7 +381,11 @@ mod tests {
 
                 let got_tag = input[0] & 3;
                 let want_tag = TAG_COPY1;
-                assert_eq!(got_tag, want_tag, "tag mismatch for off: {}, ml: {}", off, l);
+                assert_eq!(
+                    got_tag, want_tag,
+                    "tag mismatch for off: {}, ml: {}",
+                    off, l
+                );
 
                 let length = ((input[0] as usize) >> 2) & 15;
                 let offset = (load16(input, 0).unwrap() >> 6) as usize + 1;
@@ -352,7 +397,11 @@ mod tests {
                     (length + 4, 2)
                 };
 
-                assert_eq!(expected_length, l, "length mismatch for off: {}, ml: {}", off, l);
+                assert_eq!(
+                    expected_length, l,
+                    "length mismatch for off: {}, ml: {}",
+                    off, l
+                );
                 assert_eq!(offset, off, "offset mismatch for off: {}, ml: {}", off, l);
                 assert_eq!(s, n, "output length mismatch for off: {}, ml: {}", off, l);
             }
@@ -368,7 +417,11 @@ mod tests {
 
                 let got_tag = input[0] & 3;
                 let want_tag = TAG_COPY2;
-                assert_eq!(got_tag, want_tag, "tag mismatch for off: {}, ml: {}", test_off, ml);
+                assert_eq!(
+                    got_tag, want_tag,
+                    "tag mismatch for off: {}, ml: {}",
+                    test_off, ml
+                );
 
                 let mut length = (input[0] as usize) >> 2;
                 let offset = (input[1] as u32 | (input[2] as u32) << 8) as usize;
@@ -388,7 +441,9 @@ mod tests {
                             5
                         }
                         63 => {
-                            length = input[3] as usize | (input[4] as usize) << 8 | (input[5] as usize) << 16;
+                            length = input[3] as usize
+                                | (input[4] as usize) << 8
+                                | (input[5] as usize) << 16;
                             length += 64;
                             6
                         }
@@ -397,9 +452,21 @@ mod tests {
                 };
                 let final_offset = offset + MIN_COPY2_OFFSET;
 
-                assert_eq!(length, ml, "length mismatch for off: {}, ml: {}", test_off, ml);
-                assert_eq!(final_offset, test_off, "offset mismatch for off: {}, ml: {}", test_off, ml);
-                assert_eq!(s, n, "output length mismatch for off: {}, ml: {}", test_off, ml);
+                assert_eq!(
+                    length, ml,
+                    "length mismatch for off: {}, ml: {}",
+                    test_off, ml
+                );
+                assert_eq!(
+                    final_offset, test_off,
+                    "offset mismatch for off: {}, ml: {}",
+                    test_off, ml
+                );
+                assert_eq!(
+                    s, n,
+                    "output length mismatch for off: {}, ml: {}",
+                    test_off, ml
+                );
 
                 ml = ((ml as f64) * l_factor + 1.0) as usize;
             }
@@ -455,7 +522,14 @@ mod tests {
                     let input = &tmp[..n];
                     let got_tag = input[0] & 7;
                     let want_tag = TAG_COPY3;
-                    assert_eq!(got_tag, want_tag, "tag mismatch for off: {}, ml: {}, ll: {}", test_off, ml, lits.len());
+                    assert_eq!(
+                        got_tag,
+                        want_tag,
+                        "tag mismatch for off: {}, ml: {}, ll: {}",
+                        test_off,
+                        ml,
+                        lits.len()
+                    );
 
                     let length_raw = (load16(input, 0).unwrap() >> 5) as usize & 63;
                     let offset = (load32(input, 0).unwrap() >> 11) as usize + MIN_COPY3_OFFSET;
@@ -464,7 +538,12 @@ mod tests {
                         0..=60 => (length_raw + 4, 4),
                         61 => (input[4] as usize + MIN_COPY3_LENGTH, 5),
                         62 => (input[4] as usize | (input[5] as usize) << 8, 6),
-                        63 => (input[4] as usize | (input[5] as usize) << 8 | (input[6] as usize) << 16, 7),
+                        63 => (
+                            input[4] as usize
+                                | (input[5] as usize) << 8
+                                | (input[6] as usize) << 16,
+                            7,
+                        ),
                         _ => panic!("invalid length encoding"),
                     };
 
@@ -481,10 +560,14 @@ mod tests {
                     assert_eq!(s, n, "output length mismatch");
 
                     ml = ((ml as f64) * l_factor + 1.0) as usize;
-                    if ml < 100 { break; } // Prevent infinite small increments
+                    if ml < 100 {
+                        break;
+                    } // Prevent infinite small increments
                 }
                 test_off *= 2;
-                if test_off < MAX_COPY2_OFFSET + 1 { break; }
+                if test_off < MAX_COPY2_OFFSET + 1 {
+                    break;
+                }
             }
             match lits.len() {
                 0 => lits.push(1),
@@ -493,7 +576,8 @@ mod tests {
         }
 
         // Test repeat
-        for l in 1..=1000 { // Reduced from MaxBlockSize for test performance
+        for l in 1..=1000 {
+            // Reduced from MaxBlockSize for test performance
             let n = emit_repeat(&mut tmp, l).unwrap();
             let input = &tmp[..n];
 
@@ -513,11 +597,13 @@ mod tests {
                 }
                 31 => {
                     assert!(n >= 4, "insufficient bytes for length {}", l);
-                    ((input[1] as usize | (input[2] as usize) << 8 | (input[3] as usize) << 16) + 30, 4)
+                    (
+                        (input[1] as usize | (input[2] as usize) << 8 | (input[3] as usize) << 16)
+                            + 30,
+                        4,
+                    )
                 }
-                _ => {
-                    (length_tmp + 1, 1)
-                }
+                _ => (length_tmp + 1, 1),
             };
 
             assert_eq!(length, l, "length mismatch for repeat length {}", l);
@@ -537,7 +623,12 @@ mod tests {
             dst.fill(0);
             let n = emit_literal(&mut dst, &input_data[..*l]).unwrap();
             let got_data = &dst[n - l..n];
-            assert_eq!(got_data, &input_data[..*l], "data not copied for length {}", l);
+            assert_eq!(
+                got_data,
+                &input_data[..*l],
+                "data not copied for length {}",
+                l
+            );
 
             let got_tag = &dst[..n - l];
             let v = got_tag[0] as u32;
@@ -546,7 +637,8 @@ mod tests {
             let value = v >> 3;
 
             let length = match tag {
-                0 => { // Literal tag
+                0 => {
+                    // Literal tag
                     match value {
                         0..=28 => value + 1,
                         29 => {
@@ -567,7 +659,11 @@ mod tests {
                 _ => panic!("unexpected tag {}", tag),
             };
 
-            assert_eq!(*l as u32, length, "length mismatch for literal length {}", l);
+            assert_eq!(
+                *l as u32, length,
+                "length mismatch for literal length {}",
+                l
+            );
         }
     }
 }

@@ -99,7 +99,9 @@ pub fn make_stream_header(block_size: usize) -> Result<Vec<u8>, Error> {
 /// where the length is stored in little-endian format.
 pub fn write_chunk_header(buf: &mut [u8], chunk_type: u8, data_len: usize) -> Result<(), Error> {
     if buf.len() < CHUNK_HEADER_SIZE {
-        return Err(Error::InvalidInput("Buffer too small for chunk header".to_string()));
+        return Err(Error::InvalidInput(
+            "Buffer too small for chunk header".to_string(),
+        ));
     }
 
     if data_len > MAX_USER_CHUNK_SIZE {
@@ -122,7 +124,9 @@ pub fn write_chunk_header(buf: &mut [u8], chunk_type: u8, data_len: usize) -> Re
 /// Writes the 4-byte masked CRC32C checksum in little-endian format.
 pub fn write_checksum(buf: &mut [u8], checksum: u32) -> Result<(), Error> {
     if buf.len() < CHECKSUM_SIZE {
-        return Err(Error::InvalidInput("Buffer too small for checksum".to_string()));
+        return Err(Error::InvalidInput(
+            "Buffer too small for checksum".to_string(),
+        ));
     }
 
     buf[0] = (checksum >> 0) as u8;
@@ -137,9 +141,9 @@ pub fn write_checksum(buf: &mut [u8], checksum: u32) -> Result<(), Error> {
 ///
 /// Returns true if the chunk ID is in a valid user-defined range.
 pub fn is_valid_user_chunk_id(id: u8) -> bool {
-    (id >= MIN_USER_SKIPPABLE_CHUNK && id <= MAX_USER_SKIPPABLE_CHUNK) ||
-    (id >= MIN_USER_NON_SKIPPABLE_CHUNK && id <= MAX_USER_NON_SKIPPABLE_CHUNK) ||
-    id == CHUNK_TYPE_PADDING
+    (id >= MIN_USER_SKIPPABLE_CHUNK && id <= MAX_USER_SKIPPABLE_CHUNK)
+        || (id >= MIN_USER_NON_SKIPPABLE_CHUNK && id <= MAX_USER_NON_SKIPPABLE_CHUNK)
+        || id == CHUNK_TYPE_PADDING
 }
 
 /// Calculate skippable frame size for padding
@@ -198,7 +202,10 @@ mod tests {
 
         // Try crc32c crate
         let crc32c_result = crc32c::crc32c(test_data);
-        println!("crc32c::crc32c: {} (0x{:08x})", crc32c_result, crc32c_result);
+        println!(
+            "crc32c::crc32c: {} (0x{:08x})",
+            crc32c_result, crc32c_result
+        );
 
         // Try crc32fast with Castagnoli (if available)
         // Need to manually implement Castagnoli table approach like Go
@@ -215,10 +222,17 @@ mod tests {
         println!("Raw CRC (same as Go): 0x{:08x}", raw_crc);
         println!("c >> 15: 0x{:08x} ({})", raw_crc >> 15, raw_crc >> 15);
         println!("c << 17: 0x{:08x} ({})", raw_crc << 17, raw_crc << 17);
-        println!("c << 17 + 0xa282ead8: 0x{:08x} ({})", (raw_crc << 17).wrapping_add(0xa282ead8), (raw_crc << 17).wrapping_add(0xa282ead8));
+        println!(
+            "c << 17 + 0xa282ead8: 0x{:08x} ({})",
+            (raw_crc << 17).wrapping_add(0xa282ead8),
+            (raw_crc << 17).wrapping_add(0xa282ead8)
+        );
 
         let correct_masked = (raw_crc >> 15) | (raw_crc << 17).wrapping_add(0xa282ead8);
-        println!("Correct masked: {} (0x{:08x})", correct_masked, correct_masked);
+        println!(
+            "Correct masked: {} (0x{:08x})",
+            correct_masked, correct_masked
+        );
     }
 
     #[test]
@@ -250,7 +264,12 @@ mod tests {
         // Test error cases
         let mut small_buf = [0u8; 2];
         assert!(write_chunk_header(&mut small_buf, CHUNK_TYPE_MINLZ_COMPRESSED, 100).is_err());
-        assert!(write_chunk_header(&mut buf, CHUNK_TYPE_MINLZ_COMPRESSED, MAX_USER_CHUNK_SIZE + 1).is_err());
+        assert!(write_chunk_header(
+            &mut buf,
+            CHUNK_TYPE_MINLZ_COMPRESSED,
+            MAX_USER_CHUNK_SIZE + 1
+        )
+        .is_err());
     }
 
     #[test]
@@ -281,8 +300,8 @@ mod tests {
     #[test]
     fn test_calc_skippable_frame_size() {
         assert_eq!(calc_skippable_frame_size(100, 64), 28); // 64 - (100 % 64) = 28, but minimum is 4
-        assert_eq!(calc_skippable_frame_size(128, 64), 0);  // Already aligned
+        assert_eq!(calc_skippable_frame_size(128, 64), 0); // Already aligned
         assert_eq!(calc_skippable_frame_size(129, 64), 63); // Need 63 more bytes
-        assert_eq!(calc_skippable_frame_size(0, 0), 0);     // Edge case
+        assert_eq!(calc_skippable_frame_size(0, 0), 0); // Edge case
     }
 }

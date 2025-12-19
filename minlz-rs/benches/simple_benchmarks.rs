@@ -3,8 +3,8 @@
 //! This benchmark suite provides basic performance testing without requiring
 //! external test files or network downloads.
 
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
-use minlz::{encode, decode, LEVEL_FASTEST, LEVEL_BALANCED, LEVEL_SMALLEST};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use minlz::{decode, encode, LEVEL_BALANCED, LEVEL_FASTEST, LEVEL_SMALLEST};
 use std::time::Duration;
 
 const KB: usize = 1024;
@@ -49,7 +49,11 @@ fn bench_encode_random(c: &mut Criterion) {
     let data_1mb = generate_random_data(MB, 12345);
     group.throughput(Throughput::Bytes(data_1mb.len() as u64));
 
-    for (level, level_name) in [(LEVEL_FASTEST, "level-1"), (LEVEL_BALANCED, "level-2"), (LEVEL_SMALLEST, "level-3")] {
+    for (level, level_name) in [
+        (LEVEL_FASTEST, "level-1"),
+        (LEVEL_BALANCED, "level-2"),
+        (LEVEL_SMALLEST, "level-3"),
+    ] {
         group.bench_with_input(
             BenchmarkId::new(format!("1MB_{}", level_name), data_1mb.len()),
             &data_1mb,
@@ -74,7 +78,11 @@ fn bench_encode_repetitive(c: &mut Criterion) {
     let data_1mb = generate_repetitive_data(MB);
     group.throughput(Throughput::Bytes(data_1mb.len() as u64));
 
-    for (level, level_name) in [(LEVEL_FASTEST, "level-1"), (LEVEL_BALANCED, "level-2"), (LEVEL_SMALLEST, "level-3")] {
+    for (level, level_name) in [
+        (LEVEL_FASTEST, "level-1"),
+        (LEVEL_BALANCED, "level-2"),
+        (LEVEL_SMALLEST, "level-3"),
+    ] {
         group.bench_with_input(
             BenchmarkId::new(format!("1MB_{}", level_name), data_1mb.len()),
             &data_1mb,
@@ -96,7 +104,7 @@ fn bench_decode_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("decode_sizes");
     group.measurement_time(Duration::from_secs(5));
 
-    let sizes = [10*KB, 100*KB, MB];
+    let sizes = [10 * KB, 100 * KB, MB];
 
     for &size in &sizes {
         let original = generate_repetitive_data(size);
@@ -130,7 +138,11 @@ fn bench_round_trip(c: &mut Criterion) {
     let data_100k = generate_repetitive_data(100 * KB);
     group.throughput(Throughput::Bytes(data_100k.len() as u64));
 
-    for (level, level_name) in [(LEVEL_FASTEST, "level-1"), (LEVEL_BALANCED, "level-2"), (LEVEL_SMALLEST, "level-3")] {
+    for (level, level_name) in [
+        (LEVEL_FASTEST, "level-1"),
+        (LEVEL_BALANCED, "level-2"),
+        (LEVEL_SMALLEST, "level-3"),
+    ] {
         group.bench_with_input(
             BenchmarkId::new(format!("100KB_{}", level_name), data_100k.len()),
             &data_100k,

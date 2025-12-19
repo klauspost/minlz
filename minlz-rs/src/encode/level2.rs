@@ -2,12 +2,12 @@
 
 use crate::{
     constants::*,
-    error::Result,
-    memory::{load64, load32, load64_unchecked},
     encode::{
-        emit::{emit_literal, emit_repeat, emit_copy, emit_copy_lits2, emit_copy_lits3},
+        emit::{emit_copy, emit_copy_lits2, emit_copy_lits3, emit_literal, emit_repeat},
         hash::{hash4, hash6, hash7},
     },
+    error::Result,
+    memory::{load32, load64, load64_unchecked},
 };
 
 /// Level 2 encoder - balanced compression using dual hash tables
@@ -78,11 +78,16 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                 const WANT_REPEAT_BYTES: usize = 4;
                 const REPEAT_MASK: u64 = ((1u64 << (WANT_REPEAT_BYTES * 8)) - 1) << (8 * CHECK_REP);
 
-                if (cv & REPEAT_MASK) == (unsafe { load64_unchecked(src, s - repeat) } & REPEAT_MASK) {
+                if (cv & REPEAT_MASK)
+                    == (unsafe { load64_unchecked(src, s - repeat) } & REPEAT_MASK)
+                {
                     let mut base = s + CHECK_REP;
 
                     // Extend backwards
-                    while base > next_emit && base > repeat && src[base - 1] == src[base - repeat - 1] {
+                    while base > next_emit
+                        && base > repeat
+                        && src[base - 1] == src[base - repeat - 1]
+                    {
                         base -= 1;
                     }
 
@@ -106,7 +111,8 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                             break;
                         }
 
-                        let diff = unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate) };
+                        let diff = unsafe { load64_unchecked(src, s) }
+                            ^ unsafe { load64_unchecked(src, candidate) };
                         if diff != 0 {
                             s += (diff.trailing_zeros() >> 3) as usize;
                             break;
@@ -207,7 +213,8 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                 break;
             }
 
-            let diff = unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate_l) };
+            let diff =
+                unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate_l) };
             if diff != 0 {
                 s += (diff.trailing_zeros() >> 3) as usize;
                 break;
@@ -270,7 +277,6 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
         if d > dst_limit {
             return Ok(0);
         }
-
 
         // Index short & long entries
         let index0 = base + 1;
@@ -365,11 +371,16 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                 const WANT_REPEAT_BYTES: usize = 4;
                 const REPEAT_MASK: u64 = ((1u64 << (WANT_REPEAT_BYTES * 8)) - 1) << (8 * CHECK_REP);
 
-                if (cv & REPEAT_MASK) == (unsafe { load64_unchecked(src, s - repeat) } & REPEAT_MASK) {
+                if (cv & REPEAT_MASK)
+                    == (unsafe { load64_unchecked(src, s - repeat) } & REPEAT_MASK)
+                {
                     let mut base = s + CHECK_REP;
 
                     // Extend backwards
-                    while base > next_emit && base > repeat && src[base - 1] == src[base - repeat - 1] {
+                    while base > next_emit
+                        && base > repeat
+                        && src[base - 1] == src[base - repeat - 1]
+                    {
                         base -= 1;
                     }
 
@@ -393,7 +404,8 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                             break;
                         }
 
-                        let diff = unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate) };
+                        let diff = unsafe { load64_unchecked(src, s) }
+                            ^ unsafe { load64_unchecked(src, candidate) };
                         if diff != 0 {
                             s += (diff.trailing_zeros() >> 3) as usize;
                             break;
@@ -494,7 +506,8 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                 break;
             }
 
-            let diff = unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate_l) };
+            let diff =
+                unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate_l) };
             if diff != 0 {
                 s += (diff.trailing_zeros() >> 3) as usize;
                 break;
@@ -538,7 +551,6 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
         if d > dst_limit {
             return Ok(0);
         }
-
 
         // Index short & long entries
         let index0 = base + 1;

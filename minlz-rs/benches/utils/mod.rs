@@ -3,17 +3,20 @@
 //! This module provides helper functions for downloading test data, reading files,
 //! and data manipulation that mirrors the Go benchmark implementation.
 
+use reqwest::blocking as reqwest;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use reqwest::blocking as reqwest;
 
 pub mod test_files;
 pub use test_files::{TestFile, TEST_FILES};
 
 /// Download a benchmark file if it doesn't exist locally
 /// Returns the path to the local file
-pub fn ensure_benchmark_file(test_file: &TestFile, bench_data_dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub fn ensure_benchmark_file(
+    test_file: &TestFile,
+    bench_data_dir: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Create benchmark data directory if it doesn't exist
     fs::create_dir_all(bench_data_dir)?;
 
@@ -27,12 +30,21 @@ pub fn ensure_benchmark_file(test_file: &TestFile, bench_data_dir: &Path) -> Res
     }
 
     // Download the file
-    println!("Downloading test data: {} from {}", test_file.filename, test_file.url());
+    println!(
+        "Downloading test data: {} from {}",
+        test_file.filename,
+        test_file.url()
+    );
 
     let response = reqwest::get(&test_file.url())?;
 
     if !response.status().is_success() {
-        return Err(format!("Failed to download {}: HTTP {}", test_file.url(), response.status()).into());
+        return Err(format!(
+            "Failed to download {}: HTTP {}",
+            test_file.url(),
+            response.status()
+        )
+        .into());
     }
 
     let content = response.bytes()?;
@@ -42,13 +54,20 @@ pub fn ensure_benchmark_file(test_file: &TestFile, bench_data_dir: &Path) -> Res
     file.write_all(&content)?;
     file.flush()?;
 
-    println!("Downloaded {} ({} bytes)", test_file.filename, content.len());
+    println!(
+        "Downloaded {} ({} bytes)",
+        test_file.filename,
+        content.len()
+    );
 
     Ok(local_path)
 }
 
 /// Read a file and apply size limit if specified
-pub fn read_test_file(test_file: &TestFile, bench_data_dir: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn read_test_file(
+    test_file: &TestFile,
+    bench_data_dir: &Path,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let file_path = ensure_benchmark_file(test_file, bench_data_dir)?;
     let data = fs::read(&file_path)?;
 

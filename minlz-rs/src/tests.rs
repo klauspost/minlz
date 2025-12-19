@@ -14,7 +14,7 @@ mod tests {
 
     #[test]
     fn test_varint_roundtrip() {
-        use crate::varint::{encode_uvarint, decode_uvarint};
+        use crate::varint::{decode_uvarint, encode_uvarint};
 
         let test_values = [0, 1, 127, 128, 255, 256, 16383, 16384, u64::MAX];
 
@@ -70,9 +70,13 @@ mod tests {
             let mut encoded = Vec::new();
             encode(&mut encoded, &zeros, level).unwrap();
             let compression_ratio = encoded.len() as f64 / zeros.len() as f64;
-            assert!(compression_ratio < 0.1,
+            assert!(
+                compression_ratio < 0.1,
                 "Poor compression ratio {:.2} for {} zeros at level {}",
-                compression_ratio, zeros.len(), level);
+                compression_ratio,
+                zeros.len(),
+                level
+            );
         }
 
         // Test 2: Repeating pattern "ABCD"
@@ -82,9 +86,12 @@ mod tests {
             let mut encoded = Vec::new();
             encode(&mut encoded, &repeated, level).unwrap();
             let compression_ratio = encoded.len() as f64 / repeated.len() as f64;
-            assert!(compression_ratio < 0.3,
+            assert!(
+                compression_ratio < 0.3,
                 "Poor compression ratio {:.2} for ABCD pattern at level {}",
-                compression_ratio, level);
+                compression_ratio,
+                level
+            );
         }
 
         // Test 3: Single byte repeated
@@ -94,9 +101,13 @@ mod tests {
                 let mut encoded = Vec::new();
                 encode(&mut encoded, &single_byte_pattern, level).unwrap();
                 let compression_ratio = encoded.len() as f64 / single_byte_pattern.len() as f64;
-                assert!(compression_ratio < 0.1,
+                assert!(
+                    compression_ratio < 0.1,
                     "Poor compression ratio {:.2} for byte 0x{:02X} pattern at level {}",
-                    compression_ratio, byte_value, level);
+                    compression_ratio,
+                    byte_value,
+                    level
+                );
             }
         }
     }
@@ -104,17 +115,21 @@ mod tests {
     #[test]
     fn test_compression_ratios_structured_data() {
         // Test compression on JSON-like structured data
-        let json_like = br#"{"name":"test","value":123,"data":[1,2,3,4,5],"nested":{"key":"value"}}"#
-            .repeat(50); // ~3500 bytes
+        let json_like =
+            br#"{"name":"test","value":123,"data":[1,2,3,4,5],"nested":{"key":"value"}}"#
+                .repeat(50); // ~3500 bytes
 
         for level in [LEVEL_FASTEST, LEVEL_BALANCED, LEVEL_SMALLEST] {
             let mut encoded = Vec::new();
             if let Ok(_) = encode(&mut encoded, &json_like, level) {
                 let compression_ratio = encoded.len() as f64 / json_like.len() as f64;
                 // JSON-like data should compress reasonably well due to repetitive structure
-                assert!(compression_ratio < 0.8,
+                assert!(
+                    compression_ratio < 0.8,
                     "Poor compression ratio {:.2} for JSON-like data at level {}",
-                    compression_ratio, level);
+                    compression_ratio,
+                    level
+                );
             }
         }
     }

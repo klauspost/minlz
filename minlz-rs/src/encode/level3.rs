@@ -5,12 +5,12 @@
 
 use crate::{
     constants::*,
-    error::Result,
-    memory::{load64, load32},
     encode::{
-        emit::{emit_literal, emit_repeat, emit_copy, emit_copy_lits2, emit_copy_lits3},
+        emit::{emit_copy, emit_copy_lits2, emit_copy_lits3, emit_literal, emit_repeat},
         hash::{hash4, hash8},
     },
+    error::Result,
+    memory::{load32, load64},
 };
 
 /// Level 3 encoder - best compression using sophisticated match finding
@@ -149,14 +149,32 @@ fn score_match(m: &Match, next_emit: usize) -> i32 {
 }
 
 // Match finding function - port of Go's matchAt
-fn match_at(src: &[u8], offset: usize, s: usize, first: u32, best: &Match, next_emit: usize, s_limit: usize) -> Match {
-    if (best.length != 0 && best.s - best.offset == s - offset) ||
-       s - offset >= MAX_COPY3_OFFSET || s <= offset {
-        return Match { offset, s, ..Default::default() };
+fn match_at(
+    src: &[u8],
+    offset: usize,
+    s: usize,
+    first: u32,
+    best: &Match,
+    next_emit: usize,
+    s_limit: usize,
+) -> Match {
+    if (best.length != 0 && best.s - best.offset == s - offset)
+        || s - offset >= MAX_COPY3_OFFSET
+        || s <= offset
+    {
+        return Match {
+            offset,
+            s,
+            ..Default::default()
+        };
     }
 
     if load32(src, offset).unwrap_or(0) != first {
-        return Match { offset, s, ..Default::default() };
+        return Match {
+            offset,
+            s,
+            ..Default::default()
+        };
     }
 
     let mut m = Match {
@@ -206,7 +224,7 @@ fn match_at(src: &[u8], offset: usize, s: usize, first: u32, best: &Match, next_
     m.score = score_match(&m, next_emit);
 
     if m.score <= -(m.s as i32) {
-        m.length = 0;  // Eliminate if no savings
+        m.length = 0; // Eliminate if no savings
     }
 
     if m.s + m.length < s_limit {
@@ -221,15 +239,31 @@ fn match_at(src: &[u8], offset: usize, s: usize, first: u32, best: &Match, next_
 }
 
 // Repeat match finding - port of Go's matchAtRepeat
-fn match_at_repeat(src: &[u8], offset: usize, s: usize, first: u32, best: &Match, next_emit: usize, s_limit: usize) -> Match {
+fn match_at_repeat(
+    src: &[u8],
+    offset: usize,
+    s: usize,
+    first: u32,
+    best: &Match,
+    next_emit: usize,
+    s_limit: usize,
+) -> Match {
     if best.rep {
-        return Match { offset, s, ..Default::default() };
+        return Match {
+            offset,
+            s,
+            ..Default::default()
+        };
     }
 
     const CHECK_BYTES: usize = 3;
     let mask = (1u32 << (8 * CHECK_BYTES)) - 1;
     if (load32(src, offset).unwrap_or(0) & mask) != (first & mask) {
-        return Match { offset, s, ..Default::default() };
+        return Match {
+            offset,
+            s,
+            ..Default::default()
+        };
     }
 
     let mut m = Match {
@@ -330,9 +364,9 @@ fn best_of(a: Match, b: Match) -> Match {
 /// Main Level 3 encoding function - port of Go's encodeBlockBest
 fn encode_block_best(dst: &mut [u8], src: &[u8]) -> Result<usize> {
     // Hash table configuration - matches Go's encodeBlockBest
-    const L_TABLE_BITS: u8 = 20;  // Long hash matches
+    const L_TABLE_BITS: u8 = 20; // Long hash matches
     const MAX_L_TABLE_SIZE: usize = 1 << L_TABLE_BITS;
-    const S_TABLE_BITS: u8 = 18;  // Short hash matches
+    const S_TABLE_BITS: u8 = 18; // Short hash matches
     const MAX_S_TABLE_SIZE: usize = 1 << S_TABLE_BITS;
     const INPUT_MARGIN: usize = 8 + 2;
     const MAX_SKIP: usize = 64;
@@ -345,7 +379,7 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> Result<usize> {
 
     let mut d = 0;
     let mut next_emit = 0;
-    let mut s = 1;  // Start looking for matches at s == 1
+    let mut s = 1; // Start looking for matches at s == 1
     let mut repeat = 1;
     let mut cv = load64(src, s)?;
 
@@ -380,16 +414,74 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> Result<usize> {
 
             // Test candidates at current position
             if s > 0 {
-                best = best_of(best, match_at(src, get_cur(candidate_l), s, cv as u32, &best, next_emit, s_limit));
-                best = best_of(best, match_at(src, get_prev(candidate_l), s, cv as u32, &best, next_emit, s_limit));
-                best = best_of(best, match_at(src, get_cur(candidate_s), s, cv as u32, &best, next_emit, s_limit));
-                best = best_of(best, match_at(src, get_prev(candidate_s), s, cv as u32, &best, next_emit, s_limit));
+                best = best_of(
+                    best,
+                    match_at(
+                        src,
+                        get_cur(candidate_l),
+                        s,
+                        cv as u32,
+                        &best,
+                        next_emit,
+                        s_limit,
+                    ),
+                );
+                best = best_of(
+                    best,
+                    match_at(
+                        src,
+                        get_prev(candidate_l),
+                        s,
+                        cv as u32,
+                        &best,
+                        next_emit,
+                        s_limit,
+                    ),
+                );
+                best = best_of(
+                    best,
+                    match_at(
+                        src,
+                        get_cur(candidate_s),
+                        s,
+                        cv as u32,
+                        &best,
+                        next_emit,
+                        s_limit,
+                    ),
+                );
+                best = best_of(
+                    best,
+                    match_at(
+                        src,
+                        get_prev(candidate_s),
+                        s,
+                        cv as u32,
+                        &best,
+                        next_emit,
+                        s_limit,
+                    ),
+                );
             }
 
             // Test repeat matches
             if repeat <= s {
-                best = best_of(best, match_at_repeat(src, s - repeat, s, cv as u32, &best, next_emit, s_limit));
-                best = best_of(best, match_at_repeat(src, s - repeat + 1, s + 1, (cv >> 8) as u32, &best, next_emit, s_limit));
+                best = best_of(
+                    best,
+                    match_at_repeat(src, s - repeat, s, cv as u32, &best, next_emit, s_limit),
+                );
+                best = best_of(
+                    best,
+                    match_at_repeat(
+                        src,
+                        s - repeat + 1,
+                        s + 1,
+                        (cv >> 8) as u32,
+                        &best,
+                        next_emit,
+                        s_limit,
+                    ),
+                );
             }
 
             if best.length > 0 {
@@ -402,10 +494,54 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                     let next_short = s_table[hash_s_fwd];
                     let next_long = l_table[hash_l_fwd];
 
-                    best = best_of(best, match_at(src, get_cur(next_short), s_fwd, cv_fwd as u32, &best, next_emit, s_limit));
-                    best = best_of(best, match_at(src, get_prev(next_short), s_fwd, cv_fwd as u32, &best, next_emit, s_limit));
-                    best = best_of(best, match_at(src, get_cur(next_long), s_fwd, cv_fwd as u32, &best, next_emit, s_limit));
-                    best = best_of(best, match_at(src, get_prev(next_long), s_fwd, cv_fwd as u32, &best, next_emit, s_limit));
+                    best = best_of(
+                        best,
+                        match_at(
+                            src,
+                            get_cur(next_short),
+                            s_fwd,
+                            cv_fwd as u32,
+                            &best,
+                            next_emit,
+                            s_limit,
+                        ),
+                    );
+                    best = best_of(
+                        best,
+                        match_at(
+                            src,
+                            get_prev(next_short),
+                            s_fwd,
+                            cv_fwd as u32,
+                            &best,
+                            next_emit,
+                            s_limit,
+                        ),
+                    );
+                    best = best_of(
+                        best,
+                        match_at(
+                            src,
+                            get_cur(next_long),
+                            s_fwd,
+                            cv_fwd as u32,
+                            &best,
+                            next_emit,
+                            s_limit,
+                        ),
+                    );
+                    best = best_of(
+                        best,
+                        match_at(
+                            src,
+                            get_prev(next_long),
+                            s_fwd,
+                            cv_fwd as u32,
+                            &best,
+                            next_emit,
+                            s_limit,
+                        ),
+                    );
 
                     // Look ahead +2
                     let s_fwd2 = s_fwd + 1;
@@ -417,13 +553,68 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                         let next_short2 = s_table[hash_s_fwd2];
 
                         if repeat <= s_fwd2 {
-                            best = best_of(best, match_at_repeat(src, s_fwd2 - repeat, s_fwd2, cv_fwd2 as u32, &best, next_emit, s_limit));
+                            best = best_of(
+                                best,
+                                match_at_repeat(
+                                    src,
+                                    s_fwd2 - repeat,
+                                    s_fwd2,
+                                    cv_fwd2 as u32,
+                                    &best,
+                                    next_emit,
+                                    s_limit,
+                                ),
+                            );
                         }
 
-                        best = best_of(best, match_at(src, get_cur(next_short2), s_fwd2, cv_fwd2 as u32, &best, next_emit, s_limit));
-                        best = best_of(best, match_at(src, get_prev(next_short2), s_fwd2, cv_fwd2 as u32, &best, next_emit, s_limit));
-                        best = best_of(best, match_at(src, get_cur(next_long2), s_fwd2, cv_fwd2 as u32, &best, next_emit, s_limit));
-                        best = best_of(best, match_at(src, get_prev(next_long2), s_fwd2, cv_fwd2 as u32, &best, next_emit, s_limit));
+                        best = best_of(
+                            best,
+                            match_at(
+                                src,
+                                get_cur(next_short2),
+                                s_fwd2,
+                                cv_fwd2 as u32,
+                                &best,
+                                next_emit,
+                                s_limit,
+                            ),
+                        );
+                        best = best_of(
+                            best,
+                            match_at(
+                                src,
+                                get_prev(next_short2),
+                                s_fwd2,
+                                cv_fwd2 as u32,
+                                &best,
+                                next_emit,
+                                s_limit,
+                            ),
+                        );
+                        best = best_of(
+                            best,
+                            match_at(
+                                src,
+                                get_cur(next_long2),
+                                s_fwd2,
+                                cv_fwd2 as u32,
+                                &best,
+                                next_emit,
+                                s_limit,
+                            ),
+                        );
+                        best = best_of(
+                            best,
+                            match_at(
+                                src,
+                                get_prev(next_long2),
+                                s_fwd2,
+                                cv_fwd2 as u32,
+                                &best,
+                                next_emit,
+                                s_limit,
+                            ),
+                        );
                     }
                 }
             }
@@ -452,10 +643,32 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                             let check_at_prev = get_prev(next_l).saturating_sub(back_l);
 
                             if check_at_cur > 0 {
-                                best = best_of(best, match_at(src, check_at_cur, s_back, cv_back as u32, &best, next_emit, s_limit));
+                                best = best_of(
+                                    best,
+                                    match_at(
+                                        src,
+                                        check_at_cur,
+                                        s_back,
+                                        cv_back as u32,
+                                        &best,
+                                        next_emit,
+                                        s_limit,
+                                    ),
+                                );
                             }
                             if check_at_prev > 0 {
-                                best = best_of(best, match_at(src, check_at_prev, s_back, cv_back as u32, &best, next_emit, s_limit));
+                                best = best_of(
+                                    best,
+                                    match_at(
+                                        src,
+                                        check_at_prev,
+                                        s_back,
+                                        cv_back as u32,
+                                        &best,
+                                        next_emit,
+                                        s_limit,
+                                    ),
+                                );
                             }
 
                             // Test short hash candidates too
@@ -466,10 +679,32 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> Result<usize> {
                             let check_at_prev_s = get_prev(next_s).saturating_sub(back_l);
 
                             if check_at_cur_s > 0 {
-                                best = best_of(best, match_at(src, check_at_cur_s, s_back, cv_back as u32, &best, next_emit, s_limit));
+                                best = best_of(
+                                    best,
+                                    match_at(
+                                        src,
+                                        check_at_cur_s,
+                                        s_back,
+                                        cv_back as u32,
+                                        &best,
+                                        next_emit,
+                                        s_limit,
+                                    ),
+                                );
                             }
                             if check_at_prev_s > 0 {
-                                best = best_of(best, match_at(src, check_at_prev_s, s_back, cv_back as u32, &best, next_emit, s_limit));
+                                best = best_of(
+                                    best,
+                                    match_at(
+                                        src,
+                                        check_at_prev_s,
+                                        s_back,
+                                        cv_back as u32,
+                                        &best,
+                                        next_emit,
+                                        s_limit,
+                                    ),
+                                );
                             }
                         }
                     }
@@ -502,8 +737,11 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> Result<usize> {
 
         // Bail if the match is equal or worse to the encoding (Go logic)
         if !best.rep && best.length <= 4 {
-            if offset > 65535 ||
-               (offset > MAX_COPY1_OFFSET && offset <= MAX_COPY2_OFFSET && base - next_emit > MAX_COPY2_LITS) {
+            if offset > 65535
+                || (offset > MAX_COPY1_OFFSET
+                    && offset <= MAX_COPY2_OFFSET
+                    && base - next_emit > MAX_COPY2_LITS)
+            {
                 s = start_idx + 1;
                 if s >= s_limit {
                     break 'outer;
@@ -521,8 +759,10 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             let lits = &src[next_emit..base];
             if !lits.is_empty() {
                 if offset <= MAX_COPY2_OFFSET {
-                    if lits.len() > MAX_COPY2_LITS || offset < 64 ||
-                       (offset <= 1024 && best.length > 18) {
+                    if lits.len() > MAX_COPY2_LITS
+                        || offset < 64
+                        || (offset <= 1024 && best.length > 18)
+                    {
                         d += emit_literal(&mut dst[d..], lits)?;
                         d += emit_copy(&mut dst[d..], offset, best.length)?;
                     } else {

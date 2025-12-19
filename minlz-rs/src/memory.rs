@@ -115,9 +115,5 @@ pub unsafe fn load32_unchecked(src: &[u8], index: usize) -> u32 {
 #[inline(always)]
 #[allow(dead_code)]
 pub unsafe fn load16_unchecked(src: &[u8], index: usize) -> u16 {
-    u16::from_le_bytes([
-        *src.get_unchecked(index),
-        *src.get_unchecked(index + 1),
-    ])
+    u16::from_le_bytes([*src.get_unchecked(index), *src.get_unchecked(index + 1)])
 }
-

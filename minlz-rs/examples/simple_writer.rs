@@ -3,7 +3,7 @@
 //! This example shows how to use the streaming writer to compress data
 //! and verify the output format matches the MinLZ specification.
 
-use minlz::{Writer, LEVEL_FASTEST, LEVEL_BALANCED, LEVEL_SMALLEST};
+use minlz::{Writer, LEVEL_BALANCED, LEVEL_FASTEST, LEVEL_SMALLEST};
 use std::io::Write;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,7 +20,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Test different compression levels
-    for (level, name) in [(LEVEL_FASTEST, "Fastest"), (LEVEL_BALANCED, "Balanced"), (LEVEL_SMALLEST, "Smallest")] {
+    for (level, name) in [
+        (LEVEL_FASTEST, "Fastest"),
+        (LEVEL_BALANCED, "Balanced"),
+        (LEVEL_SMALLEST, "Smallest"),
+    ] {
         println!("Compression Level: {} ({})", level, name);
 
         let mut output = Vec::new();

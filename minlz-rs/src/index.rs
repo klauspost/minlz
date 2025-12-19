@@ -193,7 +193,9 @@ impl Index {
             }
 
             // Combine into offset pairs
-            for (uncompressed, compressed) in uncompressed_offsets.into_iter().zip(compressed_offsets) {
+            for (uncompressed, compressed) in
+                uncompressed_offsets.into_iter().zip(compressed_offsets)
+            {
                 offsets.push(OffsetPair {
                     compressed_offset: compressed,
                     uncompressed_offset: uncompressed,
@@ -216,9 +218,10 @@ impl Index {
         }
 
         // Binary search for the best entry
-        match self.offsets.binary_search_by(|entry| {
-            entry.uncompressed_offset.cmp(&uncompressed_pos)
-        }) {
+        match self
+            .offsets
+            .binary_search_by(|entry| entry.uncompressed_offset.cmp(&uncompressed_pos))
+        {
             Ok(idx) => Some(self.offsets[idx]),
             Err(idx) => {
                 if idx == 0 {
@@ -311,16 +314,34 @@ mod tests {
         index.add_block(4000, MIN_INDEX_DISTANCE * 2).unwrap();
 
         // Exact match
-        assert_eq!(index.find_offset(MIN_INDEX_DISTANCE).unwrap().compressed_offset, 2000);
+        assert_eq!(
+            index
+                .find_offset(MIN_INDEX_DISTANCE)
+                .unwrap()
+                .compressed_offset,
+            2000
+        );
 
         // Between entries (should return previous)
-        assert_eq!(index.find_offset(MIN_INDEX_DISTANCE + 100).unwrap().compressed_offset, 2000);
+        assert_eq!(
+            index
+                .find_offset(MIN_INDEX_DISTANCE + 100)
+                .unwrap()
+                .compressed_offset,
+            2000
+        );
 
         // At first entry position
         assert_eq!(index.find_offset(0).unwrap().compressed_offset, 100);
 
         // After last entry
-        assert_eq!(index.find_offset(MIN_INDEX_DISTANCE * 3).unwrap().compressed_offset, 4000);
+        assert_eq!(
+            index
+                .find_offset(MIN_INDEX_DISTANCE * 3)
+                .unwrap()
+                .compressed_offset,
+            4000
+        );
     }
 
     #[test]

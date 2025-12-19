@@ -141,22 +141,20 @@ impl<R: Read> Reader<R> {
         // Read chunk header (type + length) - 4 bytes total
         let mut chunk_header = [0u8; 4];
         match self.source.read_exact(&mut chunk_header) {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 // End of stream without proper EOF chunk
                 self.state = ReaderState::Finished;
                 return Ok(false);
-            },
+            }
             Err(e) => return Err(Error::Io(e)),
         }
         self.bytes_read += 4;
 
         // Parse chunk header
         let chunk_type = chunk_header[0];
-        let chunk_length = u32::from_le_bytes([
-            chunk_header[1], chunk_header[2], chunk_header[3], 0
-        ]) as usize;
-
+        let chunk_length =
+            u32::from_le_bytes([chunk_header[1], chunk_header[2], chunk_header[3], 0]) as usize;
 
         // Validate chunk length is reasonable
         if chunk_length > self.max_block_size * 2 {
@@ -174,22 +172,22 @@ impl<R: Read> Reader<R> {
                 }
                 self.state = ReaderState::Finished;
                 return Ok(false);
-            },
+            }
 
             stream::CHUNK_TYPE_UNCOMPRESSED => {
                 // Uncompressed chunk - read directly
                 return self.read_uncompressed_chunk(chunk_length);
-            },
+            }
 
             stream::CHUNK_TYPE_MINLZ_COMPRESSED => {
                 // MinLZ compressed chunk
                 return self.read_compressed_chunk(chunk_length);
-            },
+            }
 
             chunk_type if (chunk_type >= 0x80 && chunk_type <= 0xfd) => {
                 // User-defined chunk
                 return self.read_user_chunk(chunk_type, chunk_length);
-            },
+            }
 
             _ => {
                 // Skip unknown chunk types
@@ -203,7 +201,6 @@ impl<R: Read> Reader<R> {
 
     /// Read and process an uncompressed chunk
     fn read_uncompressed_chunk(&mut self, chunk_length: usize) -> Result<bool> {
-
         // Validate and extract CRC32 if present
         if chunk_length < 4 {
             return Err(Error::Corrupt);
@@ -214,16 +211,15 @@ impl<R: Read> Reader<R> {
             self.read_buffer.resize(chunk_length, 0);
         }
 
-        self.source.read_exact(&mut self.read_buffer[..chunk_length])?;
+        self.source
+            .read_exact(&mut self.read_buffer[..chunk_length])?;
         self.bytes_read += chunk_length as u64;
 
         // First 4 bytes are CRC32, rest is uncompressed data (matching Go format)
         let crc_bytes = &self.read_buffer[..4];
         let uncompressed_data = &self.read_buffer[4..chunk_length];
-        let stored_crc = u32::from_le_bytes([
-            crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]
-        ]);
-
+        let stored_crc =
+            u32::from_le_bytes([crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]]);
 
         // Verify CRC32
         let calculated_crc = stream::crc32_minlz(uncompressed_data);
@@ -234,19 +230,18 @@ impl<R: Read> Reader<R> {
         // Add to output buffer directly (no decompression needed)
         self.output_buffer.extend_from_slice(uncompressed_data);
 
-
         Ok(true)
     }
 
     /// Read and process a compressed chunk
     fn read_compressed_chunk(&mut self, chunk_length: usize) -> Result<bool> {
-
         // Read the entire chunk
         if self.read_buffer.len() < chunk_length {
             self.read_buffer.resize(chunk_length, 0);
         }
 
-        self.source.read_exact(&mut self.read_buffer[..chunk_length])?;
+        self.source
+            .read_exact(&mut self.read_buffer[..chunk_length])?;
         self.bytes_read += chunk_length as u64;
 
         // Validate and extract CRC32 if present
@@ -257,10 +252,8 @@ impl<R: Read> Reader<R> {
         // First 4 bytes are CRC32, rest is compressed data (matching Go format)
         let crc_bytes = &self.read_buffer[..4];
         let compressed_data = &self.read_buffer[4..chunk_length];
-        let stored_crc = u32::from_le_bytes([
-            crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]
-        ]);
-
+        let stored_crc =
+            u32::from_le_bytes([crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]]);
 
         // Per SPEC 4.4: MinLZ compressed data (chunk type 0x02) contains
         // "A MinLZ block *without* the MinLZ identifier (initial 0 byte)"
@@ -273,16 +266,14 @@ impl<R: Read> Reader<R> {
         // Decompress the complete MinLZ block
         let mut decompressed = Vec::new();
         match decode(&mut decompressed, &full_block) {
-            Ok(()) => {
-            }
+            Ok(()) => {}
             Err(e) => {
-
                 // Check if this might be uncompressed data stored directly in a type=2 chunk
                 // This can happen when Go's encoder determines compression would make data larger
                 if let Some(uncompressed_len) = try_extract_uncompressed_from_type2(&full_block) {
-
                     // Skip the varint header and treat the rest as literal data
-                    let (_varint_value, varint_len) = crate::varint::decode_uvarint(&full_block[1..])?;
+                    let (_varint_value, varint_len) =
+                        crate::varint::decode_uvarint(&full_block[1..])?;
                     let literal_data = &full_block[1 + varint_len..];
 
                     if literal_data.len() == uncompressed_len {
@@ -302,7 +293,6 @@ impl<R: Read> Reader<R> {
         if calculated_crc != stored_crc {
             return Err(Error::Corrupt);
         }
-
 
         // Add to output buffer
         self.output_buffer.extend_from_slice(&decompressed);
@@ -338,13 +328,13 @@ impl<R: Read> Reader<R> {
             match self.state {
                 ReaderState::ReadingHeader => {
                     self.read_header()?;
-                },
+                }
                 ReaderState::ReadingChunks => {
                     if !self.read_next_chunk()? {
                         // No more chunks or EOF reached
                         break;
                     }
-                },
+                }
                 ReaderState::Finished => break,
                 ReaderState::Error => return Err(Error::Corrupt),
             }
@@ -374,7 +364,8 @@ impl<R: Read> Read for Reader<R> {
         }
 
         let to_copy = buf.len().min(available);
-        buf[..to_copy].copy_from_slice(&self.output_buffer[self.output_pos..self.output_pos + to_copy]);
+        buf[..to_copy]
+            .copy_from_slice(&self.output_buffer[self.output_pos..self.output_pos + to_copy]);
         self.output_pos += to_copy;
         self.bytes_written += to_copy as u64;
 
@@ -403,21 +394,24 @@ fn try_extract_uncompressed_from_type2(full_block: &[u8]) -> Option<usize> {
             // Additional validation: check if the data looks like text/binary content
             // rather than MinLZ instruction sequences
             if data_start < full_block.len() {
-                let first_few_bytes = &full_block[data_start..data_start.min(full_block.len()).min(data_start + 16)];
+                let first_few_bytes =
+                    &full_block[data_start..data_start.min(full_block.len()).min(data_start + 16)];
 
                 // MinLZ instructions typically have specific patterns for tags (0-4)
                 // If we see mostly printable ASCII or other non-instruction patterns,
                 // it's likely uncompressed data
-                let non_instruction_like = first_few_bytes.iter()
+                let non_instruction_like = first_few_bytes
+                    .iter()
                     .take(8) // Check first 8 bytes
                     .filter(|&&b| {
                         // Not typical MinLZ instruction bytes
                         b > 31 && b < 127 || // Printable ASCII
-                        b == 0 || b == 255  // Common data bytes
+                        b == 0 || b == 255 // Common data bytes
                     })
                     .count();
 
-                if non_instruction_like >= 4 { // More than half look like data, not instructions
+                if non_instruction_like >= 4 {
+                    // More than half look like data, not instructions
                     return Some(varint_value as usize);
                 }
             }
@@ -490,9 +484,7 @@ mod tests {
     #[test]
     fn test_reader_empty_stream() {
         let mut compressed = Vec::new();
-        let writer = Writer::builder(&mut compressed)
-            .build()
-            .unwrap();
+        let writer = Writer::builder(&mut compressed).build().unwrap();
         let (final_output, _) = writer.finish().unwrap();
 
         let mut reader = Reader::new(&final_output[..]).unwrap();
@@ -508,9 +500,7 @@ mod tests {
         let input = b"Test data for statistics validation";
 
         let mut compressed = Vec::new();
-        let mut writer = Writer::builder(&mut compressed)
-            .build()
-            .unwrap();
+        let mut writer = Writer::builder(&mut compressed).build().unwrap();
         writer.write_all(input).unwrap();
         let (final_output, _) = writer.finish().unwrap();
 
@@ -529,14 +519,11 @@ mod tests {
 
         // Try to read Go-generated file
         if let Ok(go_data) = fs::read("go_test.mz") {
-
             let mut reader = Reader::new(&go_data[..]).unwrap();
             let mut decompressed = Vec::new();
             match reader.read_to_end(&mut decompressed) {
-                Ok(_bytes_read) => {
-                },
-                Err(_e) => {
-                }
+                Ok(_bytes_read) => {}
+                Err(_e) => {}
             }
         } else {
         }

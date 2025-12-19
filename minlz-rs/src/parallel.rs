@@ -4,10 +4,10 @@
 //! and channels for communication. It maintains output order while allowing parallel processing.
 
 use crate::{Error, Result};
+use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::collections::BTreeMap;
 
 /// A work item representing a block to be compressed
 #[derive(Debug)]
@@ -55,7 +55,9 @@ impl CompressionPool {
     /// Create a new compression pool with the specified number of worker threads
     pub fn new(num_threads: usize) -> Result<Self> {
         if num_threads == 0 {
-            return Err(Error::InvalidInput("Thread count must be greater than 0".to_string()));
+            return Err(Error::InvalidInput(
+                "Thread count must be greater than 0".to_string(),
+            ));
         }
 
         let (job_sender, job_receiver) = mpsc::channel();
@@ -96,7 +98,9 @@ impl CompressionPool {
     /// Returns the sequence number assigned to this job
     pub fn compress_block(&mut self, data: Vec<u8>, level: i32) -> Result<u64> {
         if self.shutdown {
-            return Err(Error::InvalidInput("Compression pool is shut down".to_string()));
+            return Err(Error::InvalidInput(
+                "Compression pool is shut down".to_string(),
+            ));
         }
 
         let sequence = self.next_sequence;
@@ -109,11 +113,13 @@ impl CompressionPool {
         };
 
         if let Some(ref sender) = self.job_sender {
-            sender.send(job).map_err(|_| {
-                Error::InvalidInput("Failed to send job to workers".to_string())
-            })?;
+            sender
+                .send(job)
+                .map_err(|_| Error::InvalidInput("Failed to send job to workers".to_string()))?;
         } else {
-            return Err(Error::InvalidInput("Compression pool is shut down".to_string()));
+            return Err(Error::InvalidInput(
+                "Compression pool is shut down".to_string(),
+            ));
         }
 
         Ok(sequence)
@@ -148,11 +154,11 @@ impl CompressionPool {
                         // Store for later - out of order result
                         self.pending_results.insert(result.sequence, result);
                     }
-                },
+                }
                 Err(mpsc::TryRecvError::Empty) => {
                     // No results ready
                     return Ok(None);
-                },
+                }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     // Workers have finished - check if we have pending results
                     if let Some(result) = self.pending_results.remove(&self.next_output_sequence) {
@@ -196,14 +202,17 @@ impl CompressionPool {
                     }
 
                     // Check for any pending results that are now ready
-                    while let Some(pending_result) = self.pending_results.remove(&self.next_output_sequence) {
+                    while let Some(pending_result) =
+                        self.pending_results.remove(&self.next_output_sequence)
+                    {
                         self.next_output_sequence += 1;
                         match pending_result.error {
                             Some(err) => return Err(err),
-                            None => results.push((pending_result.compressed, pending_result.original_data)),
+                            None => results
+                                .push((pending_result.compressed, pending_result.original_data)),
                         }
                     }
-                },
+                }
                 Err(_) => {
                     // Channel closed, no more results
                     break;
@@ -224,9 +233,9 @@ impl CompressionPool {
             // Wait for all workers to finish
             let workers = std::mem::take(&mut self.workers);
             for worker in workers {
-                worker.join().map_err(|_| {
-                    Error::InvalidInput("Failed to join worker thread".to_string())
-                })?;
+                worker
+                    .join()
+                    .map_err(|_| Error::InvalidInput("Failed to join worker thread".to_string()))?;
             }
         }
 
@@ -278,15 +287,13 @@ impl CompressionPool {
                             error: None,
                         }
                     }
-                },
-                Err(e) => {
-                    CompressionResult {
-                        sequence: job.sequence,
-                        compressed: Vec::new(),
-                        original_data: job.data.clone(),
-                        error: Some(e),
-                    }
                 }
+                Err(e) => CompressionResult {
+                    sequence: job.sequence,
+                    compressed: Vec::new(),
+                    original_data: job.data.clone(),
+                    error: Some(e),
+                },
             };
 
             // Send result back
@@ -324,7 +331,8 @@ impl BufferPool {
     /// Get a buffer from the pool or create a new one
     pub fn get_buffer(&self) -> Vec<u8> {
         let mut pool = self.pool.lock().unwrap();
-        pool.pop().unwrap_or_else(|| Vec::with_capacity(self.default_capacity))
+        pool.pop()
+            .unwrap_or_else(|| Vec::with_capacity(self.default_capacity))
     }
 
     /// Return a buffer to the pool
@@ -379,12 +387,17 @@ mod tests {
             // Create complete MinLZ block: 0x00 + varint(original_len) + compressed_data
             let mut complete_block = Vec::new();
             complete_block.push(0x00); // MinLZ block identifier
-            crate::varint::encode_uvarint_vec(&mut complete_block, original_data.len() as u64).unwrap();
+            crate::varint::encode_uvarint_vec(&mut complete_block, original_data.len() as u64)
+                .unwrap();
             complete_block.extend_from_slice(compressed_data);
 
             let mut decompressed = Vec::new();
             crate::decode::decode(&mut decompressed, &complete_block).unwrap();
-            assert_eq!(&decompressed, original_data, "Round-trip failed for result {}", i);
+            assert_eq!(
+                &decompressed, original_data,
+                "Round-trip failed for result {}",
+                i
+            );
         }
     }
 
@@ -422,12 +435,20 @@ mod tests {
                 // Create complete MinLZ block: 0x00 + varint(original_len) + compressed_data
                 let mut complete_block = Vec::new();
                 complete_block.push(0x00); // MinLZ block identifier
-                crate::varint::encode_uvarint_vec(&mut complete_block, original_result.len() as u64).unwrap();
+                crate::varint::encode_uvarint_vec(
+                    &mut complete_block,
+                    original_result.len() as u64,
+                )
+                .unwrap();
                 complete_block.extend_from_slice(compressed_data);
 
                 let mut decompressed = Vec::new();
                 crate::decode::decode(&mut decompressed, &complete_block).unwrap();
-                assert_eq!(&decompressed, original_result, "Round-trip failed for result {}", i);
+                assert_eq!(
+                    &decompressed, original_result,
+                    "Round-trip failed for result {}",
+                    i
+                );
             }
         }
     }

@@ -7,9 +7,9 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        encode::{encode, level1, level2, level3},
-        decode::decode,
         constants::*,
+        decode::decode,
+        encode::{encode, level1, level2, level3},
     };
     use proptest::prelude::*;
     use proptest::test_runner::TestCaseResult;
@@ -50,7 +50,10 @@ mod tests {
     #[test]
     fn continuous_round_trip_all_levels() {
         let cases = get_test_cases();
-        println!("Running continuous round-trip fuzzing with {} test cases", cases);
+        println!(
+            "Running continuous round-trip fuzzing with {} test cases",
+            cases
+        );
 
         fn property(data: Vec<u8>) -> TestCaseResult {
             if data.is_empty() {
@@ -82,7 +85,10 @@ mod tests {
     #[test]
     fn continuous_block_level_robustness() {
         let cases = get_test_cases();
-        println!("Running continuous block-level robustness fuzzing with {} test cases", cases);
+        println!(
+            "Running continuous block-level robustness fuzzing with {} test cases",
+            cases
+        );
 
         fn property(data: Vec<u8>) -> TestCaseResult {
             if data.len() < MIN_NON_LITERAL_BLOCK_SIZE {
@@ -107,7 +113,10 @@ mod tests {
     #[test]
     fn continuous_decoder_robustness() {
         let cases = get_test_cases();
-        println!("Running continuous decoder robustness fuzzing with {} test cases", cases);
+        println!(
+            "Running continuous decoder robustness fuzzing with {} test cases",
+            cases
+        );
 
         fn property(data: Vec<u8>) -> TestCaseResult {
             let mut decoded = Vec::new();
@@ -126,7 +135,10 @@ mod tests {
     #[test]
     fn continuous_repetitive_patterns() {
         let cases = get_test_cases() / 4;
-        println!("Running continuous repetitive pattern fuzzing with {} test cases", cases);
+        println!(
+            "Running continuous repetitive pattern fuzzing with {} test cases",
+            cases
+        );
 
         fn property(data: Vec<u8>) -> TestCaseResult {
             if data.len() < MIN_NON_LITERAL_BLOCK_SIZE {
@@ -157,7 +169,10 @@ mod tests {
     #[test]
     fn continuous_compression_consistency() {
         let cases = get_test_cases() / 2; // Use fewer cases for multiple level testing
-        println!("Running continuous compression consistency fuzzing with {} test cases", cases);
+        println!(
+            "Running continuous compression consistency fuzzing with {} test cases",
+            cases
+        );
 
         fn property(data: Vec<u8>) -> TestCaseResult {
             if data.len() < MIN_NON_LITERAL_BLOCK_SIZE {

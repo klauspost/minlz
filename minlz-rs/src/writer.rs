@@ -4,9 +4,9 @@
 //! stream format as defined in SPEC.md. The writer is designed to mirror the
 //! functionality of the Go implementation while being idiomatic to Rust.
 
-use crate::{encode, varint, Error, Result, LEVEL_BALANCED, LEVEL_FASTEST, LEVEL_SMALLEST};
-use crate::stream::*;
 use crate::parallel::CompressionPool;
+use crate::stream::*;
+use crate::{encode, varint, Error, Result, LEVEL_BALANCED, LEVEL_FASTEST, LEVEL_SMALLEST};
 use std::io::{self, Write};
 
 /// Default block size for compression (2MB)
@@ -302,7 +302,11 @@ impl<W: Write> Writer<W> {
     }
 
     /// Write pre-compressed data as a chunk
-    fn write_compressed_data(&mut self, compressed_data: Vec<u8>, original_data: &[u8]) -> Result<()> {
+    fn write_compressed_data(
+        &mut self,
+        compressed_data: Vec<u8>,
+        original_data: &[u8],
+    ) -> Result<()> {
         if let Some(ref mut writer) = self.writer {
             // Calculate checksum for the original uncompressed data (MinLZ format requirement)
             let checksum = crc32_minlz(original_data);
@@ -314,7 +318,8 @@ impl<W: Write> Writer<W> {
             } else {
                 // Compression succeeded - prepare with varint length + compressed data
                 let mut buffer = Vec::new();
-                let _varint_len = crate::varint::encode_uvarint_vec(&mut buffer, original_data.len() as u64)?;
+                let _varint_len =
+                    crate::varint::encode_uvarint_vec(&mut buffer, original_data.len() as u64)?;
                 buffer.extend_from_slice(&compressed_data);
                 (CHUNK_TYPE_MINLZ_COMPRESSED, buffer)
             };
@@ -378,7 +383,11 @@ impl<W: Write> Writer<W> {
             // Write padding chunk header
             let data_size = padding_size - crate::stream::CHUNK_HEADER_SIZE as u64;
             let mut header = [0u8; 4];
-            crate::stream::write_chunk_header(&mut header, crate::stream::CHUNK_TYPE_PADDING, data_size as usize)?;
+            crate::stream::write_chunk_header(
+                &mut header,
+                crate::stream::CHUNK_TYPE_PADDING,
+                data_size as usize,
+            )?;
 
             if let Some(writer) = &mut self.writer {
                 writer.write_all(&header)?;
@@ -419,11 +428,16 @@ impl<W: Write> Writer<W> {
         if self.compression_pool.is_some() {
             // Parallel compression: submit block to pool
             let data = self.input_buffer.clone();
-            self.compression_pool.as_mut().unwrap().compress_block(data, self.level)?;
+            self.compression_pool
+                .as_mut()
+                .unwrap()
+                .compress_block(data, self.level)?;
 
             // Try to get completed results and write them
             let mut results = Vec::new();
-            while let Some((compressed_data, original_data)) = self.compression_pool.as_mut().unwrap().get_result()? {
+            while let Some((compressed_data, original_data)) =
+                self.compression_pool.as_mut().unwrap().get_result()?
+            {
                 results.push((compressed_data, original_data));
             }
 
@@ -448,7 +462,7 @@ impl<W: Write> Write for Writer<W> {
         if self.closed {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
-                "Writer is closed"
+                "Writer is closed",
             ));
         }
 
@@ -612,8 +626,8 @@ impl<W: Write> WriterBuilder<W> {
         }
 
         // Calculate output buffer size
-        let output_buffer_size = OUTPUT_BUFFER_HEADER_SIZE +
-            crate::max_encoded_len(self.block_size).unwrap_or(self.block_size + 2);
+        let output_buffer_size = OUTPUT_BUFFER_HEADER_SIZE
+            + crate::max_encoded_len(self.block_size).unwrap_or(self.block_size + 2);
 
         // Initialize compression pool for parallel compression
         let compression_pool = if self.concurrency > 1 {
@@ -783,7 +797,10 @@ mod tests {
 
         // Test Go CRC value (from hex dump: 8c 84 51 d4)
         let go_crc = u32::from_le_bytes([0x8c, 0x84, 0x51, 0xd4]);
-        println!("Go CRC: {} (0x{:08x}) (from bytes 8c 84 51 d4)", go_crc, go_crc);
+        println!(
+            "Go CRC: {} (0x{:08x}) (from bytes 8c 84 51 d4)",
+            go_crc, go_crc
+        );
     }
 
     #[test]
@@ -796,9 +813,15 @@ mod tests {
             .unwrap();
 
         // Write multiple blocks to trigger parallel compression
-        writer.write_all(b"First block of data for parallel compression").unwrap();
-        writer.write_all(b"Second block of data for parallel compression").unwrap();
-        writer.write_all(b"Third block of data for parallel compression").unwrap();
+        writer
+            .write_all(b"First block of data for parallel compression")
+            .unwrap();
+        writer
+            .write_all(b"Second block of data for parallel compression")
+            .unwrap();
+        writer
+            .write_all(b"Third block of data for parallel compression")
+            .unwrap();
 
         let (final_output, _) = writer.finish().unwrap();
 
@@ -817,7 +840,8 @@ mod tests {
 
     #[test]
     fn test_writer_single_vs_parallel() {
-        let test_data = b"This is test data for comparing single vs parallel compression performance";
+        let test_data =
+            b"This is test data for comparing single vs parallel compression performance";
 
         // Single-threaded compression
         let mut output1 = Vec::new();
@@ -892,12 +916,16 @@ mod tests {
         // Both should decompress to the same original data
         let mut reader_no_padding = crate::Reader::new(&final_no_padding[..]).unwrap();
         let mut decompressed_no_padding = Vec::new();
-        reader_no_padding.read_to_end(&mut decompressed_no_padding).unwrap();
+        reader_no_padding
+            .read_to_end(&mut decompressed_no_padding)
+            .unwrap();
         assert_eq!(&decompressed_no_padding, input);
 
         let mut reader_with_padding = crate::Reader::new(&final_with_padding[..]).unwrap();
         let mut decompressed_with_padding = Vec::new();
-        reader_with_padding.read_to_end(&mut decompressed_with_padding).unwrap();
+        reader_with_padding
+            .read_to_end(&mut decompressed_with_padding)
+            .unwrap();
         assert_eq!(&decompressed_with_padding, input);
     }
 }

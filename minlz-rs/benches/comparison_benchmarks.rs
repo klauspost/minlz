@@ -3,8 +3,8 @@
 //! This benchmark suite mirrors the structure and test data of the Go benchmarks_test.go
 //! to enable direct performance comparison between Rust and Go MinLZ implementations.
 
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
-use minlz::{encode, decode, LEVEL_FASTEST, LEVEL_BALANCED, LEVEL_SMALLEST};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use minlz::{decode, encode, LEVEL_BALANCED, LEVEL_FASTEST, LEVEL_SMALLEST};
 use std::time::Duration;
 
 mod utils;
@@ -45,7 +45,10 @@ fn bench_encode_file(c: &mut Criterion, test_file: &TestFile, level: i32, level_
     let mut compressed = Vec::new();
     encode(&mut compressed, &data, level).expect("encoding failed for ratio calculation");
     let ratio = (compressed.len() as f64 / data.len() as f64) * 100.0;
-    println!("  {}/{}: {:.1}% compression ratio", test_file.label, level_name, ratio);
+    println!(
+        "  {}/{}: {:.1}% compression ratio",
+        test_file.label, level_name, ratio
+    );
 
     group.finish();
 }
@@ -114,7 +117,11 @@ fn bench_encode_random(c: &mut Criterion) {
     let data_1mb = generate_random_data(MB, 1);
     group.throughput(Throughput::Bytes(data_1mb.len() as u64));
 
-    for (level, level_name) in [(LEVEL_FASTEST, "level-1"), (LEVEL_BALANCED, "level-2"), (LEVEL_SMALLEST, "level-3")] {
+    for (level, level_name) in [
+        (LEVEL_FASTEST, "level-1"),
+        (LEVEL_BALANCED, "level-2"),
+        (LEVEL_SMALLEST, "level-3"),
+    ] {
         group.bench_with_input(
             BenchmarkId::new(format!("1MB_{}", level_name), data_1mb.len()),
             &data_1mb,
@@ -132,7 +139,11 @@ fn bench_encode_random(c: &mut Criterion) {
     let data_8mb = generate_random_data(MAX_BLOCK_SIZE, 1);
     group.throughput(Throughput::Bytes(data_8mb.len() as u64));
 
-    for (level, level_name) in [(LEVEL_FASTEST, "level-1"), (LEVEL_BALANCED, "level-2"), (LEVEL_SMALLEST, "level-3")] {
+    for (level, level_name) in [
+        (LEVEL_FASTEST, "level-1"),
+        (LEVEL_BALANCED, "level-2"),
+        (LEVEL_SMALLEST, "level-3"),
+    ] {
         group.bench_with_input(
             BenchmarkId::new(format!("8MB_{}", level_name), data_8mb.len()),
             &data_8mb,
@@ -167,7 +178,11 @@ fn bench_twain_encode(c: &mut Criterion) {
         let data = expand(&twain_data, size);
         group.throughput(Throughput::Bytes(data.len() as u64));
 
-        for (level, level_name) in [(LEVEL_FASTEST, "level-1"), (LEVEL_BALANCED, "level-2"), (LEVEL_SMALLEST, "level-3")] {
+        for (level, level_name) in [
+            (LEVEL_FASTEST, "level-1"),
+            (LEVEL_BALANCED, "level-2"),
+            (LEVEL_SMALLEST, "level-3"),
+        ] {
             group.bench_with_input(
                 BenchmarkId::new(format!("{}_{}", size, level_name), data.len()),
                 &data,
@@ -202,7 +217,11 @@ fn bench_twain_decode(c: &mut Criterion) {
     for &size in &sizes {
         let data = expand(&twain_data, size);
 
-        for (level, level_name) in [(LEVEL_FASTEST, "level-1"), (LEVEL_BALANCED, "level-2"), (LEVEL_SMALLEST, "level-3")] {
+        for (level, level_name) in [
+            (LEVEL_FASTEST, "level-1"),
+            (LEVEL_BALANCED, "level-2"),
+            (LEVEL_SMALLEST, "level-3"),
+        ] {
             let mut compressed = Vec::new();
             if encode(&mut compressed, &data, level).is_err() {
                 continue;
@@ -255,7 +274,11 @@ fn bench_encode_parallel(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(data.len() as u64));
         group.measurement_time(Duration::from_secs(10));
 
-        for (level, level_name) in [(LEVEL_FASTEST, "level-1"), (LEVEL_BALANCED, "level-2"), (LEVEL_SMALLEST, "level-3")] {
+        for (level, level_name) in [
+            (LEVEL_FASTEST, "level-1"),
+            (LEVEL_BALANCED, "level-2"),
+            (LEVEL_SMALLEST, "level-3"),
+        ] {
             group.bench_with_input(
                 BenchmarkId::new(level_name, data.len()),
                 &data,
@@ -286,13 +309,20 @@ fn bench_decode_parallel(c: &mut Criterion) {
             }
         };
 
-        for (level, level_name) in [(LEVEL_FASTEST, "level-1"), (LEVEL_BALANCED, "level-2"), (LEVEL_SMALLEST, "level-3")] {
+        for (level, level_name) in [
+            (LEVEL_FASTEST, "level-1"),
+            (LEVEL_BALANCED, "level-2"),
+            (LEVEL_SMALLEST, "level-3"),
+        ] {
             let mut compressed = Vec::new();
             if encode(&mut compressed, &data, level).is_err() {
                 continue;
             }
 
-            let mut group = c.benchmark_group(format!("decode_parallel_{}_{}", test_file.label, level_name));
+            let mut group = c.benchmark_group(format!(
+                "decode_parallel_{}_{}",
+                test_file.label, level_name
+            ));
             group.throughput(Throughput::Bytes(data.len() as u64));
             group.measurement_time(Duration::from_secs(10));
 

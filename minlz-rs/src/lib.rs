@@ -27,24 +27,22 @@
 //! ```
 
 mod constants;
-mod error;
-mod memory;
-mod varint;
 mod decode;
 pub mod encode;
-mod stream;
+mod error;
 mod index;
-mod writer;
-mod reader;
+mod memory;
 mod parallel;
-
+mod reader;
+mod stream;
+mod varint;
+mod writer;
 
 #[cfg(test)]
 mod decode_validation_tests;
 
 #[cfg(test)]
 mod tests;
-
 
 #[cfg(test)]
 mod integration_tests;
@@ -55,16 +53,14 @@ mod fuzz_tests;
 #[cfg(test)]
 mod continuous_fuzz;
 
-
-
 pub use constants::*;
-pub use error::{Error, Result};
-pub use encode::encode;
 pub use decode::decode;
-pub use writer::{Writer, WriterBuilder};
-pub use reader::Reader;
+pub use encode::encode;
+pub use error::{Error, Result};
 pub use index::{Index, OffsetPair};
-pub use parallel::{CompressionPool, BufferPool};
+pub use parallel::{BufferPool, CompressionPool};
+pub use reader::Reader;
+pub use writer::{Writer, WriterBuilder};
 
 /// Maximum size of a block that can be compressed/decompressed
 pub const MAX_BLOCK_SIZE: usize = 8 << 20; // 8 MiB

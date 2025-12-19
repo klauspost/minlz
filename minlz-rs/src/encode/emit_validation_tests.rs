@@ -6,11 +6,7 @@
 //! 3. Generated copy operations are decodable (sufficient prior data exists)
 //! 4. Emit functions return correct write offsets
 
-use crate::{
-    constants::*,
-    encode::emit::*,
-    memory::*,
-};
+use crate::{constants::*, encode::emit::*, memory::*};
 
 /// Simulates decoder state to validate that copy operations are feasible
 struct DecoderSimulator {
@@ -50,10 +46,11 @@ impl DecoderSimulator {
         if self.output_pos + length > self.output_buffer.len() {
             return Err(format!(
                 "Copy would exceed output buffer: pos {} + length {} > capacity {}",
-                self.output_pos, length, self.output_buffer.len()
+                self.output_pos,
+                length,
+                self.output_buffer.len()
             ));
         }
-
 
         // Simulate the copy operation
         let src_start = self.output_pos - offset;
@@ -65,11 +62,14 @@ impl DecoderSimulator {
 
         Ok(())
     }
-
 }
 
 /// Test a specific copy operation with decoder simulation
-fn test_copy_operation_roundtrip(offset: usize, length: usize, output_pos: usize) -> Result<(), String> {
+fn test_copy_operation_roundtrip(
+    offset: usize,
+    length: usize,
+    output_pos: usize,
+) -> Result<(), String> {
     // For the bug case, we need to simulate the exact scenario:
     // decoder at position 169996 tries to copy 67596 bytes with offset 102400
     // but the buffer capacity is limited (e.g., 170000 bytes total)
@@ -113,8 +113,11 @@ mod tests {
 
                         // 2. Verify it parses correctly (existing validation)
                         let got_tag = instruction[0] & 3;
-                        assert_eq!(got_tag, TAG_COPY1,
-                            "Copy1 tag mismatch for offset={}, length={}", offset, length);
+                        assert_eq!(
+                            got_tag, TAG_COPY1,
+                            "Copy1 tag mismatch for offset={}, length={}",
+                            offset, length
+                        );
 
                         // Parse back the offset and length
                         let parsed_length = ((instruction[0] as usize) >> 2) & 15;
@@ -127,12 +130,21 @@ mod tests {
                             (parsed_length + 4, 2)
                         };
 
-                        assert_eq!(final_length, length,
-                            "Copy1 length mismatch for offset={}, length={}", offset, length);
-                        assert_eq!(parsed_offset, offset,
-                            "Copy1 offset mismatch for offset={}, length={}", offset, length);
-                        assert_eq!(expected_size, n,
-                            "Copy1 size mismatch for offset={}, length={}", offset, length);
+                        assert_eq!(
+                            final_length, length,
+                            "Copy1 length mismatch for offset={}, length={}",
+                            offset, length
+                        );
+                        assert_eq!(
+                            parsed_offset, offset,
+                            "Copy1 offset mismatch for offset={}, length={}",
+                            offset, length
+                        );
+                        assert_eq!(
+                            expected_size, n,
+                            "Copy1 size mismatch for offset={}, length={}",
+                            offset, length
+                        );
 
                         // 3. Test with decoder simulation
                         test_copy_operation_roundtrip(offset, length, *output_pos)
@@ -153,9 +165,11 @@ mod tests {
         // Test Copy2 operations with decoder simulation (optimized for speed)
         let test_offsets = [MAX_COPY1_OFFSET + 1, 10000, 30000, MAX_COPY2_OFFSET];
         for test_offset in test_offsets {
-            for length in &[4, 16, 1000] { // Reduced test cases
+            for length in &[4, 16, 1000] {
+                // Reduced test cases
                 // Test at key output positions
-                for output_pos in &[test_offset, test_offset + 10000] { // Reduced positions
+                for output_pos in &[test_offset, test_offset + 10000] {
+                    // Reduced positions
                     if *output_pos >= test_offset {
                         // 1. Emit the instruction
                         let n = emit_copy(&mut tmp, test_offset, *length).unwrap();
@@ -163,12 +177,16 @@ mod tests {
 
                         // 2. Verify it parses correctly
                         let got_tag = instruction[0] & 3;
-                        assert_eq!(got_tag, TAG_COPY2,
-                            "Copy2 tag mismatch for offset={}, length={}", test_offset, length);
+                        assert_eq!(
+                            got_tag, TAG_COPY2,
+                            "Copy2 tag mismatch for offset={}, length={}",
+                            test_offset, length
+                        );
 
                         // Parse back the parameters
                         let mut parsed_length = (instruction[0] as usize) >> 2;
-                        let parsed_offset = (instruction[1] as u32 | (instruction[2] as u32) << 8) as usize;
+                        let parsed_offset =
+                            (instruction[1] as u32 | (instruction[2] as u32) << 8) as usize;
 
                         let expected_size = if parsed_length <= 60 {
                             parsed_length += 4;
@@ -180,11 +198,16 @@ mod tests {
                                     4
                                 }
                                 62 => {
-                                    parsed_length = (instruction[3] as usize | (instruction[4] as usize) << 8) + 64;
+                                    parsed_length = (instruction[3] as usize
+                                        | (instruction[4] as usize) << 8)
+                                        + 64;
                                     5
                                 }
                                 63 => {
-                                    parsed_length = (instruction[3] as usize | (instruction[4] as usize) << 8 | (instruction[5] as usize) << 16) + 64;
+                                    parsed_length = (instruction[3] as usize
+                                        | (instruction[4] as usize) << 8
+                                        | (instruction[5] as usize) << 16)
+                                        + 64;
                                     6
                                 }
                                 _ => panic!("invalid Copy2 length encoding"),
@@ -193,12 +216,21 @@ mod tests {
 
                         let final_offset = parsed_offset + MIN_COPY2_OFFSET;
 
-                        assert_eq!(parsed_length, *length,
-                            "Copy2 length mismatch for offset={}, length={}", test_offset, length);
-                        assert_eq!(final_offset, test_offset,
-                            "Copy2 offset mismatch for offset={}, length={}", test_offset, length);
-                        assert_eq!(expected_size, n,
-                            "Copy2 size mismatch for offset={}, length={}", test_offset, length);
+                        assert_eq!(
+                            parsed_length, *length,
+                            "Copy2 length mismatch for offset={}, length={}",
+                            test_offset, length
+                        );
+                        assert_eq!(
+                            final_offset, test_offset,
+                            "Copy2 offset mismatch for offset={}, length={}",
+                            test_offset, length
+                        );
+                        assert_eq!(
+                            expected_size, n,
+                            "Copy2 size mismatch for offset={}, length={}",
+                            test_offset, length
+                        );
 
                         // 3. Test with decoder simulation
                         test_copy_operation_roundtrip(test_offset, *length, *output_pos)
@@ -220,22 +252,30 @@ mod tests {
         // Test Copy3 operations with decoder simulation (optimized)
         let test_offsets = [MAX_COPY2_OFFSET + 1, 100000, 200000];
         for test_offset in test_offsets {
-            for length in &[4, 64, 1000] { // Reduced test cases
+            for length in &[4, 64, 1000] {
+                // Reduced test cases
                 // Test at key output positions
-                for output_pos in &[test_offset, test_offset + 20000] { // Reduced positions
-                    if *output_pos >= test_offset && *length <= 100000 { // Reasonable bounds
+                for output_pos in &[test_offset, test_offset + 20000] {
+                    // Reduced positions
+                    if *output_pos >= test_offset && *length <= 100000 {
+                        // Reasonable bounds
                         // 1. Emit the instruction
                         let n = emit_copy(&mut tmp, test_offset, *length).unwrap();
                         let instruction = &tmp[..n];
 
                         // 2. Verify it parses correctly
                         let got_tag = instruction[0] & 7;
-                        assert_eq!(got_tag, TAG_COPY3,
-                            "Copy3 tag mismatch for offset={}, length={}", test_offset, length);
+                        assert_eq!(
+                            got_tag, TAG_COPY3,
+                            "Copy3 tag mismatch for offset={}, length={}",
+                            test_offset, length
+                        );
 
                         // Parse back the parameters
                         let length_raw = (load16(instruction, 0).unwrap() >> 5) as usize & 63;
-                        let parsed_offset = ((load32(instruction, 0).unwrap() >> 11) & 0x1FFFFF) as usize + MIN_COPY3_OFFSET;
+                        let parsed_offset = ((load32(instruction, 0).unwrap() >> 11) & 0x1FFFFF)
+                            as usize
+                            + MIN_COPY3_OFFSET;
 
                         let (parsed_length, expected_size) = match length_raw {
                             0..=60 => (length_raw + 4, 4),
@@ -244,22 +284,35 @@ mod tests {
                                 (ext_len, 5)
                             }
                             62 => {
-                                let ext_len = (instruction[4] as usize | (instruction[5] as usize) << 8) + 64;
+                                let ext_len =
+                                    (instruction[4] as usize | (instruction[5] as usize) << 8) + 64;
                                 (ext_len, 6)
                             }
                             63 => {
-                                let ext_len = (instruction[4] as usize | (instruction[5] as usize) << 8 | (instruction[6] as usize) << 16) + 64;
+                                let ext_len = (instruction[4] as usize
+                                    | (instruction[5] as usize) << 8
+                                    | (instruction[6] as usize) << 16)
+                                    + 64;
                                 (ext_len, 7)
                             }
                             _ => panic!("invalid Copy3 length encoding"),
                         };
 
-                        assert_eq!(parsed_length, *length,
-                            "Copy3 length mismatch for offset={}, length={}", test_offset, length);
-                        assert_eq!(parsed_offset, test_offset,
-                            "Copy3 offset mismatch for offset={}, length={}", test_offset, length);
-                        assert_eq!(expected_size, n,
-                            "Copy3 size mismatch for offset={}, length={}", test_offset, length);
+                        assert_eq!(
+                            parsed_length, *length,
+                            "Copy3 length mismatch for offset={}, length={}",
+                            test_offset, length
+                        );
+                        assert_eq!(
+                            parsed_offset, test_offset,
+                            "Copy3 offset mismatch for offset={}, length={}",
+                            test_offset, length
+                        );
+                        assert_eq!(
+                            expected_size, n,
+                            "Copy3 size mismatch for offset={}, length={}",
+                            test_offset, length
+                        );
 
                         // 3. Test with decoder simulation
                         test_copy_operation_roundtrip(test_offset, *length, *output_pos)
@@ -279,14 +332,17 @@ mod tests {
         let mut tmp = [0u8; 32];
 
         // Test Copy2 fused operations (optimized)
-        for lit_len in [1, 4] { // Test only min and max literal lengths
+        for lit_len in [1, 4] {
+            // Test only min and max literal lengths
             let literals: Vec<u8> = (0..lit_len).map(|i| (i + 1) as u8).collect();
 
             let test_offsets = [MIN_COPY2_OFFSET, 10000, MAX_COPY2_OFFSET];
             for offset in test_offsets {
-                for length in [4, 11] { // Test only min and max copy lengths
+                for length in [4, 11] {
+                    // Test only min and max copy lengths
                     // Test at key output positions
-                    for output_pos in &[offset + 1000] { // Single test position
+                    for output_pos in &[offset + 1000] {
+                        // Single test position
                         if *output_pos >= offset {
                             // 1. Emit the instruction
                             let n = emit_copy_lits2(&mut tmp, &literals, offset, length).unwrap();
@@ -294,34 +350,51 @@ mod tests {
 
                             // 2. Verify it parses correctly
                             let got_tag = instruction[0] & 3;
-                            assert_eq!(got_tag, TAG_COPY2_FUSED,
-                                "Copy2_fused tag mismatch");
+                            assert_eq!(got_tag, TAG_COPY2_FUSED, "Copy2_fused tag mismatch");
                             assert_eq!(instruction[0] & 4, 0, "copy3 bit should not be set");
 
                             let value = instruction[0] >> 3;
-                            let parsed_offset = (instruction[1] as u32 | (instruction[2] as u32) << 8) as usize + 64;
+                            let parsed_offset =
+                                (instruction[1] as u32 | (instruction[2] as u32) << 8) as usize
+                                    + 64;
                             let parsed_lit_length = (value & 3) as usize + 1;
                             let parsed_copy_length = (value >> 2) as usize + 4;
 
                             assert_eq!(parsed_copy_length, length, "copy length mismatch");
                             assert_eq!(parsed_offset, offset, "offset mismatch");
-                            assert_eq!(parsed_lit_length, literals.len(), "literal length mismatch");
+                            assert_eq!(
+                                parsed_lit_length,
+                                literals.len(),
+                                "literal length mismatch"
+                            );
 
                             let expected_size = 3 + literals.len();
                             assert_eq!(n, expected_size, "size mismatch");
 
                             // Verify literal data
                             for i in 0..literals.len() {
-                                assert_eq!(instruction[3 + i], literals[i], "literal mismatch at pos {}", i);
+                                assert_eq!(
+                                    instruction[3 + i],
+                                    literals[i],
+                                    "literal mismatch at pos {}",
+                                    i
+                                );
                             }
 
                             // 3. Test decoder simulation with literals first, then copy
                             let mut simulator = DecoderSimulator::new(*output_pos + length + 100);
-                            let pattern_data: Vec<u8> = (0..=255u8).cycle().take(*output_pos).collect();
-                            assert!(simulator.write_literals(&pattern_data), "Failed to set up pattern data");
+                            let pattern_data: Vec<u8> =
+                                (0..=255u8).cycle().take(*output_pos).collect();
+                            assert!(
+                                simulator.write_literals(&pattern_data),
+                                "Failed to set up pattern data"
+                            );
 
                             // Execute the fused operation: literals then copy
-                            assert!(simulator.write_literals(&literals), "Failed to write literals");
+                            assert!(
+                                simulator.write_literals(&literals),
+                                "Failed to write literals"
+                            );
                             simulator.execute_copy(offset, length)
                                 .unwrap_or_else(|e| panic!(
                                     "Copy2_fused simulation failed for offset={}, length={}, lit_len={}, output_pos={}: {}",
@@ -345,16 +418,25 @@ mod tests {
         // Case 2: Copy length would exceed buffer capacity (create smaller buffer)
         let mut simulator = DecoderSimulator::new(300); // Small buffer
         let pattern_data: Vec<u8> = (0..200u8).collect(); // Fill 200 bytes
-        assert!(simulator.write_literals(&pattern_data), "Failed to write pattern");
+        assert!(
+            simulator.write_literals(&pattern_data),
+            "Failed to write pattern"
+        );
         let result = simulator.execute_copy(100, 200); // Try to copy 200 bytes when only 100 left
-        assert!(result.is_err(), "Should fail when copy exceeds remaining buffer capacity");
+        assert!(
+            result.is_err(),
+            "Should fail when copy exceeds remaining buffer capacity"
+        );
 
         // Case 3: The specific bug case - 67,596 byte copy at position ~170K
         // Simulate exact conditions: decoder at 169996, wants to copy 67596 bytes
         // with 170000 byte total capacity (like original bug)
         let mut simulator = DecoderSimulator::new(170000); // Fixed capacity
         let pattern_data: Vec<u8> = (0..=255u8).cycle().take(169996).collect();
-        assert!(simulator.write_literals(&pattern_data), "Failed to write pattern");
+        assert!(
+            simulator.write_literals(&pattern_data),
+            "Failed to write pattern"
+        );
 
         let result = simulator.execute_copy(102400, 67596);
         println!("DEBUG: Bug case result: {:?}", result);
@@ -362,8 +444,11 @@ mod tests {
 
         if let Err(e) = result {
             println!("DEBUG: Error message: {}", e);
-            assert!(e.contains("Copy would exceed output buffer"),
-                "Should mention buffer overflow, got: {}", e);
+            assert!(
+                e.contains("Copy would exceed output buffer"),
+                "Should mention buffer overflow, got: {}",
+                e
+            );
         }
     }
 
@@ -376,8 +461,7 @@ mod tests {
             .expect("Should work when offset exactly equals available data");
 
         // Boundary case: minimum viable copy
-        test_copy_operation_roundtrip(1, 4, 1)
-            .expect("Should work for minimum viable copy");
+        test_copy_operation_roundtrip(1, 4, 1).expect("Should work for minimum viable copy");
 
         // Boundary case: large but valid copy
         test_copy_operation_roundtrip(10000, 5000, 20000)
@@ -398,7 +482,12 @@ mod tests {
             let instruction = &tmp[..n];
 
             // Verify correct tag
-            assert_eq!(instruction[0] & 3, TAG_COPY1, "Wrong tag for Copy1 length {}", length);
+            assert_eq!(
+                instruction[0] & 3,
+                TAG_COPY1,
+                "Wrong tag for Copy1 length {}",
+                length
+            );
 
             // Test decoder simulation
             test_copy_operation_roundtrip(offset, length, output_pos)
@@ -414,7 +503,12 @@ mod tests {
             let instruction = &tmp[..n];
 
             // Verify correct tag
-            assert_eq!(instruction[0] & 3, TAG_COPY2, "Wrong tag for Copy2 length {}", length);
+            assert_eq!(
+                instruction[0] & 3,
+                TAG_COPY2,
+                "Wrong tag for Copy2 length {}",
+                length
+            );
 
             // Test decoder simulation
             test_copy_operation_roundtrip(offset, length, output_pos)
@@ -423,14 +517,20 @@ mod tests {
 
         // Copy3 length encodings: 4-64 (direct), 65-320 (1-byte), 321-65600 (2-byte), 65601+ (3-byte)
         let copy3_offset = 100000;
-        for length in [4, 60, 64, 65, 320, 321, 1000, 65000, 65600, 65601] { // Exclude very large for performance
+        for length in [4, 60, 64, 65, 320, 321, 1000, 65000, 65600, 65601] {
+            // Exclude very large for performance
             let output_pos = 200000 + length; // Ensure sufficient buffer space
 
             let n = emit_copy(&mut tmp, copy3_offset, length).unwrap();
             let instruction = &tmp[..n];
 
             // Verify correct tag
-            assert_eq!(instruction[0] & 7, TAG_COPY3, "Wrong tag for Copy3 length {}", length);
+            assert_eq!(
+                instruction[0] & 7,
+                TAG_COPY3,
+                "Wrong tag for Copy3 length {}",
+                length
+            );
 
             // Verify length field parsing
             let length_raw = (load16(instruction, 0).unwrap() >> 5) as usize & 63;
@@ -442,13 +542,21 @@ mod tests {
                 _ => panic!("Invalid length_raw: {}", length_raw),
             };
 
-            assert_eq!(n, expected_size, "Wrong instruction size for Copy3 length {}", length);
+            assert_eq!(
+                n, expected_size,
+                "Wrong instruction size for Copy3 length {}",
+                length
+            );
 
             // Test decoder simulation with explicit buffer management for large lengths
             let mut simulator = DecoderSimulator::new(output_pos + length + 1000);
             let pattern_data: Vec<u8> = (0..=255u8).cycle().take(output_pos).collect();
-            assert!(simulator.write_literals(&pattern_data), "Failed to write pattern data");
-            simulator.execute_copy(copy3_offset, length)
+            assert!(
+                simulator.write_literals(&pattern_data),
+                "Failed to write pattern data"
+            );
+            simulator
+                .execute_copy(copy3_offset, length)
                 .unwrap_or_else(|e| panic!("Copy3 length {} simulation failed: {}", length, e));
         }
     }
@@ -472,44 +580,82 @@ mod tests {
             let n = emit_copy(&mut tmp, copy2_offset, length).unwrap();
             let instruction = &tmp[..n];
 
-            assert_eq!(instruction[0] & 3, TAG_COPY2, "Wrong Copy2 tag for 3-byte length {}", length);
-            assert_eq!(n, 6, "Copy2 with 3-byte extension should be 6 bytes, got {} for length {}", n, length);
+            assert_eq!(
+                instruction[0] & 3,
+                TAG_COPY2,
+                "Wrong Copy2 tag for 3-byte length {}",
+                length
+            );
+            assert_eq!(
+                n, 6,
+                "Copy2 with 3-byte extension should be 6 bytes, got {} for length {}",
+                n, length
+            );
 
             // Verify 3-byte length encoding
             let length_type = (instruction[0] as usize) >> 2;
-            assert_eq!(length_type, 63, "Should use 3-byte extension (type 63) for length {}", length);
+            assert_eq!(
+                length_type, 63,
+                "Should use 3-byte extension (type 63) for length {}",
+                length
+            );
 
             // Decode the 3-byte length
-            let decoded_length = ((instruction[3] as usize) |
-                                ((instruction[4] as usize) << 8) |
-                                ((instruction[5] as usize) << 16)) + 64;
-            assert_eq!(decoded_length, length, "3-byte length decoding failed for Copy2 length {}", length);
+            let decoded_length = ((instruction[3] as usize)
+                | ((instruction[4] as usize) << 8)
+                | ((instruction[5] as usize) << 16))
+                + 64;
+            assert_eq!(
+                decoded_length, length,
+                "3-byte length decoding failed for Copy2 length {}",
+                length
+            );
 
             // Test decoder simulation
-            test_copy_operation_roundtrip(copy2_offset, length, output_pos)
-                .unwrap_or_else(|e| panic!("Copy2 3-byte length {} simulation failed: {}", length, e));
+            test_copy_operation_roundtrip(copy2_offset, length, output_pos).unwrap_or_else(|e| {
+                panic!("Copy2 3-byte length {} simulation failed: {}", length, e)
+            });
 
             // Test Copy3 with 3-byte extension
             let copy3_offset = 100000;
             let n = emit_copy(&mut tmp, copy3_offset, length).unwrap();
             let instruction = &tmp[..n];
 
-            assert_eq!(instruction[0] & 7, TAG_COPY3, "Wrong Copy3 tag for 3-byte length {}", length);
-            assert_eq!(n, 7, "Copy3 with 3-byte extension should be 7 bytes, got {} for length {}", n, length);
+            assert_eq!(
+                instruction[0] & 7,
+                TAG_COPY3,
+                "Wrong Copy3 tag for 3-byte length {}",
+                length
+            );
+            assert_eq!(
+                n, 7,
+                "Copy3 with 3-byte extension should be 7 bytes, got {} for length {}",
+                n, length
+            );
 
             // Verify 3-byte length encoding for Copy3
             let length_raw = (load16(instruction, 0).unwrap() >> 5) as usize & 63;
-            assert_eq!(length_raw, 63, "Copy3 should use 3-byte extension (type 63) for length {}", length);
+            assert_eq!(
+                length_raw, 63,
+                "Copy3 should use 3-byte extension (type 63) for length {}",
+                length
+            );
 
             // Decode the 3-byte length for Copy3
-            let decoded_length = ((instruction[4] as usize) |
-                                ((instruction[5] as usize) << 8) |
-                                ((instruction[6] as usize) << 16)) + 64;
-            assert_eq!(decoded_length, length, "3-byte length decoding failed for Copy3 length {}", length);
+            let decoded_length = ((instruction[4] as usize)
+                | ((instruction[5] as usize) << 8)
+                | ((instruction[6] as usize) << 16))
+                + 64;
+            assert_eq!(
+                decoded_length, length,
+                "3-byte length decoding failed for Copy3 length {}",
+                length
+            );
 
             // Test decoder simulation
-            test_copy_operation_roundtrip(copy3_offset, length, output_pos)
-                .unwrap_or_else(|e| panic!("Copy3 3-byte length {} simulation failed: {}", length, e));
+            test_copy_operation_roundtrip(copy3_offset, length, output_pos).unwrap_or_else(|e| {
+                panic!("Copy3 3-byte length {} simulation failed: {}", length, e)
+            });
         }
     }
 
@@ -525,7 +671,11 @@ mod tests {
 
         // Try to copy with offset larger than available data
         match simulator.execute_copy(50, 10) {
-            Err(err) => assert!(err.contains("exceeds available data"), "Expected bounds error, got: {}", err),
+            Err(err) => assert!(
+                err.contains("exceeds available data"),
+                "Expected bounds error, got: {}",
+                err
+            ),
             Ok(_) => panic!("Should have failed with offset > available data"),
         }
     }
@@ -547,9 +697,12 @@ mod tests {
         // This should fail because we don't have enough output buffer space
         match simulator.execute_copy(reasonable_offset, massive_length) {
             Err(err) => {
-                assert!(err.contains("exceed output buffer") || err.contains("exceeds available"),
-                    "Expected buffer overflow error for massive copy, got: {}", err);
-            },
+                assert!(
+                    err.contains("exceed output buffer") || err.contains("exceeds available"),
+                    "Expected buffer overflow error for massive copy, got: {}",
+                    err
+                );
+            }
             Ok(_) => panic!("Massive 67,596-byte copy should have been rejected"),
         }
     }
@@ -576,7 +729,11 @@ mod tests {
 
         // Test copy that would exceed buffer by 1 byte
         match simulator.execute_copy(10, 11) {
-            Err(err) => assert!(err.contains("exceed output buffer"), "Expected overflow error, got: {}", err),
+            Err(err) => assert!(
+                err.contains("exceed output buffer"),
+                "Expected overflow error, got: {}",
+                err
+            ),
             Ok(_) => panic!("Overflow copy should have been rejected"),
         }
     }
@@ -598,7 +755,7 @@ mod tests {
                 // Should create "ABCDCDCDCD" pattern
                 let expected = b"ABCDCDCDCD";
                 assert_eq!(&simulator.output_buffer[0..10], expected);
-            },
+            }
             Err(e) => panic!("Overlapping copy should succeed: {}", e),
         }
     }
@@ -623,7 +780,11 @@ mod tests {
 
         // Test offset exactly equal to available data (should fail)
         match simulator.execute_copy(5009, 4) {
-            Err(err) => assert!(err.contains("exceeds available data"), "Expected offset error, got: {}", err),
+            Err(err) => assert!(
+                err.contains("exceeds available data"),
+                "Expected offset error, got: {}",
+                err
+            ),
             Ok(_) => panic!("Copy with offset > available data should fail"),
         }
     }
@@ -647,7 +808,8 @@ mod tests {
         }
 
         // Add repetitive content that might trigger the bug
-        let repetitive_content = b"<div class=\"content\">This is repetitive content that appears many times.</div>\n";
+        let repetitive_content =
+            b"<div class=\"content\">This is repetitive content that appears many times.</div>\n";
         for _ in 0..2000 {
             test_data.extend_from_slice(repetitive_content);
         }
@@ -665,7 +827,10 @@ mod tests {
                 if compressed_size == 0 {
                     println!("✓ Level 1 encoder correctly rejected input as non-compressible");
                 } else {
-                    println!("✓ Level 1 encoder completed without massive copy operations: {} bytes", compressed_size);
+                    println!(
+                        "✓ Level 1 encoder completed without massive copy operations: {} bytes",
+                        compressed_size
+                    );
 
                     // Verify the output is decodable
                     let mut decompressed = Vec::new();
@@ -687,21 +852,30 @@ mod tests {
 
                     match crate::decode(&mut decompressed, &minlz_block) {
                         Ok(()) => {
-                            assert_eq!(decompressed, test_data, "Regression test: Round-trip validation failed");
+                            assert_eq!(
+                                decompressed, test_data,
+                                "Regression test: Round-trip validation failed"
+                            );
                             println!("✓ Perfect round-trip validation - no corruption detected");
-                        },
+                        }
                         Err(e) => {
                             panic!("Regression test FAILED: Decoder could not process Level 1 output: {:?}", e);
                         }
                     }
                 }
-            },
+            }
             Err(e) => {
                 // Check if this is the expected validation error catching massive copy operations
                 if format!("{:?}", e).contains("Corrupt") {
-                    println!("✓ Encoder validation successfully caught problematic copy operation: {:?}", e);
+                    println!(
+                        "✓ Encoder validation successfully caught problematic copy operation: {:?}",
+                        e
+                    );
                 } else {
-                    panic!("Regression test: Level 1 encoder failed unexpectedly: {:?}", e);
+                    panic!(
+                        "Regression test: Level 1 encoder failed unexpectedly: {:?}",
+                        e
+                    );
                 }
             }
         }
@@ -730,9 +904,12 @@ mod tests {
             Err(err) => {
                 println!("✓ Validation correctly rejected massive copy operation: length={}, pos={}, capacity={}",
                         massive_length, current_pos, output_capacity);
-                assert!(err.contains("exceed output buffer") || err.contains("exceeds available"),
-                       "Expected buffer overflow error, got: {}", err);
-            },
+                assert!(
+                    err.contains("exceed output buffer") || err.contains("exceeds available"),
+                    "Expected buffer overflow error, got: {}",
+                    err
+                );
+            }
             Ok(_) => {
                 panic!("Encoder validation FAILED: Should have rejected copy with length={} at pos={} with capacity={}",
                       massive_length, current_pos, output_capacity);
@@ -743,10 +920,16 @@ mod tests {
         let exact_fit_length = output_capacity - current_pos; // Exactly 4 bytes remaining
         match simulator.execute_copy(reasonable_offset, exact_fit_length) {
             Ok(_) => {
-                println!("✓ Validation correctly accepted copy that exactly fits: length={}", exact_fit_length);
-            },
+                println!(
+                    "✓ Validation correctly accepted copy that exactly fits: length={}",
+                    exact_fit_length
+                );
+            }
             Err(e) => {
-                panic!("Validation incorrectly rejected valid copy that fits exactly: {:?}", e);
+                panic!(
+                    "Validation incorrectly rejected valid copy that fits exactly: {:?}",
+                    e
+                );
             }
         }
 
@@ -758,12 +941,21 @@ mod tests {
         let overflow_length = exact_fit_length + 1;
         match simulator.execute_copy(reasonable_offset, overflow_length) {
             Err(err) => {
-                println!("✓ Validation correctly rejected copy that overflows by 1 byte: length={}", overflow_length);
-                assert!(err.contains("exceed output buffer") || err.contains("exceeds available"),
-                       "Expected buffer overflow error, got: {}", err);
-            },
+                println!(
+                    "✓ Validation correctly rejected copy that overflows by 1 byte: length={}",
+                    overflow_length
+                );
+                assert!(
+                    err.contains("exceed output buffer") || err.contains("exceeds available"),
+                    "Expected buffer overflow error, got: {}",
+                    err
+                );
+            }
             Ok(_) => {
-                panic!("Validation FAILED: Should have rejected copy with overflow length={}", overflow_length);
+                panic!(
+                    "Validation FAILED: Should have rejected copy with overflow length={}",
+                    overflow_length
+                );
             }
         }
     }

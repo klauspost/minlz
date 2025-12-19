@@ -11,9 +11,9 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        encode::{encode, level1, level2, level3},
-        decode::decode,
         constants::*,
+        decode::decode,
+        encode::{encode, level1, level2, level3},
     };
     use proptest::prelude::*;
     use proptest::test_runner::TestCaseResult;
@@ -181,7 +181,12 @@ mod tests {
                     decode(&mut decoded, &encoded)?;
 
                     // Round-trip property: decode(encode(data)) == data
-                    prop_assert_eq!(decoded, data.as_slice(), "Round-trip failed for level {}", level);
+                    prop_assert_eq!(
+                        decoded,
+                        data.as_slice(),
+                        "Round-trip failed for level {}",
+                        level
+                    );
                 }
             }
 
@@ -255,13 +260,21 @@ mod tests {
 
             // Encoded data should never be larger than original + reasonable overhead
             if encoded_len1 > 0 {
-                prop_assert!(encoded_len1 <= data.len() + 100,
-                           "Level 1 output too large: {} vs {}", encoded_len1, data.len());
+                prop_assert!(
+                    encoded_len1 <= data.len() + 100,
+                    "Level 1 output too large: {} vs {}",
+                    encoded_len1,
+                    data.len()
+                );
             }
 
             if encoded_len2 > 0 {
-                prop_assert!(encoded_len2 <= data.len() + 100,
-                           "Level 2 output too large: {} vs {}", encoded_len2, data.len());
+                prop_assert!(
+                    encoded_len2 <= data.len() + 100,
+                    "Level 2 output too large: {} vs {}",
+                    encoded_len2,
+                    data.len()
+                );
             }
 
             Ok(())
@@ -284,13 +297,22 @@ mod tests {
 
             // These should not panic, even with small buffers
             let result1 = level1::encode_block(&mut dst, &data);
-            prop_assert!(result1.is_ok(), "Level 1 should handle small buffers gracefully");
+            prop_assert!(
+                result1.is_ok(),
+                "Level 1 should handle small buffers gracefully"
+            );
 
             let result2 = level2::encode_block(&mut dst, &data);
-            prop_assert!(result2.is_ok(), "Level 2 should handle small buffers gracefully");
+            prop_assert!(
+                result2.is_ok(),
+                "Level 2 should handle small buffers gracefully"
+            );
 
             let result3 = level3::encode_block(&mut dst, &data);
-            prop_assert!(result3.is_ok(), "Level 3 should handle small buffers gracefully");
+            prop_assert!(
+                result3.is_ok(),
+                "Level 3 should handle small buffers gracefully"
+            );
 
             Ok(())
         }
@@ -316,8 +338,11 @@ mod tests {
 
             prop_assert_eq!(len1a, len1b, "Level 1 produced inconsistent output lengths");
             if len1a > 0 {
-                prop_assert_eq!(&encoded1a[..len1a], &encoded1b[..len1b],
-                               "Level 1 produced different output for same input");
+                prop_assert_eq!(
+                    &encoded1a[..len1a],
+                    &encoded1b[..len1b],
+                    "Level 1 produced different output for same input"
+                );
             }
 
             // Test Level 2 consistency
@@ -329,8 +354,11 @@ mod tests {
 
             prop_assert_eq!(len2a, len2b, "Level 2 produced inconsistent output lengths");
             if len2a > 0 {
-                prop_assert_eq!(&encoded2a[..len2a], &encoded2b[..len2b],
-                               "Level 2 produced different output for same input");
+                prop_assert_eq!(
+                    &encoded2a[..len2a],
+                    &encoded2b[..len2b],
+                    "Level 2 produced different output for same input"
+                );
             }
 
             Ok(())
@@ -415,14 +443,18 @@ mod tests {
             // Single-byte patterns should compress well
             // Level 1 is optimized for speed, so we use more lenient expectations
             if result1 > 0 {
-                prop_assert!(result1 <= data.len() * 2 / 3,
-                           "Level 1 should compress single-byte pattern to at most 67% of original size");
+                prop_assert!(
+                    result1 <= data.len() * 2 / 3,
+                    "Level 1 should compress single-byte pattern to at most 67% of original size"
+                );
             }
 
             // Level 2 should achieve better compression ratios
             if result2 > 0 {
-                prop_assert!(result2 < data.len() / 2,
-                           "Level 2 should compress single-byte pattern well");
+                prop_assert!(
+                    result2 < data.len() / 2,
+                    "Level 2 should compress single-byte pattern well"
+                );
             }
 
             Ok(())

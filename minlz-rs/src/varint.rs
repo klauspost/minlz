@@ -100,8 +100,16 @@ mod tests {
     #[test]
     fn test_varint_roundtrip() {
         let test_values = [
-            0, 1, 127, 128, 255, 256, 16383, 16384,
-            u64::MAX - 1, u64::MAX
+            0,
+            1,
+            127,
+            128,
+            255,
+            256,
+            16383,
+            16384,
+            u64::MAX - 1,
+            u64::MAX,
         ];
 
         for &value in &test_values {

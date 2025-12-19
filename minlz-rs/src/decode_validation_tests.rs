@@ -3,7 +3,10 @@
 
 use crate::{
     constants::*,
-    decode::{decode_literal_header, decode_copy1_safe, decode_copy2_safe, decode_copy3_safe, decode_fused_copy2_safe},
+    decode::{
+        decode_copy1_safe, decode_copy2_safe, decode_copy3_safe, decode_fused_copy2_safe,
+        decode_literal_header,
+    },
     error::Result,
 };
 
@@ -21,7 +24,12 @@ mod tests {
 
             let (length, repeat) = decode_literal_header(&src, &mut s, tag)?;
 
-            assert_eq!(length, (length_bits + 1) as usize, "Basic literal length for bits {}", length_bits);
+            assert_eq!(
+                length,
+                (length_bits + 1) as usize,
+                "Basic literal length for bits {}",
+                length_bits
+            );
             assert_eq!(repeat, false, "No repeat flag for basic literal");
             assert_eq!(s, 0, "Source position unchanged for basic literal");
         }
@@ -100,7 +108,12 @@ mod tests {
 
         // This should give us the 102,310 bytes from our test case
         let expected_ext = 0x88 | (0x8f << 8) | (0x01 << 16);
-        assert_eq!(length, 30 + expected_ext, "Our test case: 30 + {}", expected_ext);
+        assert_eq!(
+            length,
+            30 + expected_ext,
+            "Our test case: 30 + {}",
+            expected_ext
+        );
         assert_eq!(repeat, true, "Repeat flag should be set");
         assert_eq!(s, 3, "Source advanced by 3 bytes");
 
@@ -137,7 +150,11 @@ mod tests {
 
         let expected_offset = ((20 << 2) | 1) + 1;
         assert_eq!(offset, expected_offset, "Copy1 extended offset");
-        assert_eq!(length, COPY1_EXTENDED_BASE + 50, "Copy1 extended length = 18 + 50");
+        assert_eq!(
+            length,
+            COPY1_EXTENDED_BASE + 50,
+            "Copy1 extended length = 18 + 50"
+        );
         assert_eq!(s, 2, "Source advanced by 2 bytes for extended");
         Ok(())
     }
@@ -182,7 +199,11 @@ mod tests {
         let (offset, length) = decode_copy2_safe(&src, &mut s, tag)?;
 
         assert_eq!(offset, 0x5678 + MIN_COPY2_OFFSET, "Copy2 2-byte ext offset");
-        assert_eq!(length, COPY2_EXTENDED_BASE + 0x1234, "Copy2 2-byte ext length");
+        assert_eq!(
+            length,
+            COPY2_EXTENDED_BASE + 0x1234,
+            "Copy2 2-byte ext length"
+        );
         assert_eq!(s, 4, "Source advanced by 4 bytes");
         Ok(())
     }
@@ -199,7 +220,11 @@ mod tests {
         assert_eq!(offset, 0x5678 + MIN_COPY2_OFFSET, "Copy2 3-byte ext offset");
         // 3-byte extension: 0x04 | (0x78 << 8) | (0x8f << 16) with 4th byte as 0
         let expected_ext = 0x04 | (0x78 << 8) | (0x8f << 16);
-        assert_eq!(length, COPY2_EXTENDED_BASE + expected_ext, "Copy2 3-byte ext length");
+        assert_eq!(
+            length,
+            COPY2_EXTENDED_BASE + expected_ext,
+            "Copy2 3-byte ext length"
+        );
         assert_eq!(s, 5, "Source advanced by 5 bytes");
         Ok(())
     }
@@ -224,8 +249,8 @@ mod tests {
     fn test_decode_copy3_basic() -> Result<()> {
         // Test basic Copy3 operation (no length extension)
         let tag = 0x07 | (1 << 3) | (30 << 5); // tag=7, lit_len=1, length_val=30
-        // Construct 4-byte value: tag + 3 offset bytes
-        // We need 21-bit offset, so use a reasonable value
+                                               // Construct 4-byte value: tag + 3 offset bytes
+                                               // We need 21-bit offset, so use a reasonable value
         let offset_21bit = 0x12345; // 21-bit offset
         let val = (tag as u32) | (30u32 << 5) | (offset_21bit << 11);
         let bytes = val.to_le_bytes();
@@ -234,8 +259,16 @@ mod tests {
 
         let (offset, length, lit_len) = decode_copy3_safe(&src, &mut s, tag)?;
 
-        assert_eq!(offset, offset_21bit as usize + MIN_COPY3_OFFSET, "Copy3 offset");
-        assert_eq!(length, COPY3_BASE_LENGTH + 30, "Copy3 basic length = 4 + 30");
+        assert_eq!(
+            offset,
+            offset_21bit as usize + MIN_COPY3_OFFSET,
+            "Copy3 offset"
+        );
+        assert_eq!(
+            length,
+            COPY3_BASE_LENGTH + 30,
+            "Copy3 basic length = 4 + 30"
+        );
         assert_eq!(lit_len, 1, "Copy3 literal length");
         assert_eq!(s, 4, "Source advanced by 3 bytes");
         Ok(())
@@ -253,7 +286,11 @@ mod tests {
 
         let (offset, length, lit_len) = decode_copy3_safe(&src, &mut s, tag)?;
 
-        assert_eq!(offset, offset_21bit as usize + MIN_COPY3_OFFSET, "Copy3 1-byte ext offset");
+        assert_eq!(
+            offset,
+            offset_21bit as usize + MIN_COPY3_OFFSET,
+            "Copy3 1-byte ext offset"
+        );
         assert_eq!(length, COPY3_EXTENDED_BASE + 200, "Copy3 1-byte ext length");
         assert_eq!(lit_len, 2, "Copy3 literal length");
         assert_eq!(s, 5, "Source advanced by 4 bytes");
@@ -272,8 +309,16 @@ mod tests {
 
         let (offset, length, lit_len) = decode_copy3_safe(&src, &mut s, tag)?;
 
-        assert_eq!(offset, offset_21bit as usize + MIN_COPY3_OFFSET, "Copy3 2-byte ext offset");
-        assert_eq!(length, COPY3_EXTENDED_BASE + 0x1234, "Copy3 2-byte ext length");
+        assert_eq!(
+            offset,
+            offset_21bit as usize + MIN_COPY3_OFFSET,
+            "Copy3 2-byte ext offset"
+        );
+        assert_eq!(
+            length,
+            COPY3_EXTENDED_BASE + 0x1234,
+            "Copy3 2-byte ext length"
+        );
         assert_eq!(lit_len, 0, "Copy3 literal length");
         assert_eq!(s, 6, "Source advanced by 5 bytes");
         Ok(())
@@ -291,8 +336,16 @@ mod tests {
 
         let (offset, length, lit_len) = decode_copy3_safe(&src, &mut s, tag)?;
 
-        assert_eq!(offset, offset_21bit as usize + MIN_COPY3_OFFSET, "Copy3 3-byte ext offset");
-        assert_eq!(length, COPY3_EXTENDED_BASE + 0x345678, "Copy3 3-byte ext length");
+        assert_eq!(
+            offset,
+            offset_21bit as usize + MIN_COPY3_OFFSET,
+            "Copy3 3-byte ext offset"
+        );
+        assert_eq!(
+            length,
+            COPY3_EXTENDED_BASE + 0x345678,
+            "Copy3 3-byte ext length"
+        );
         assert_eq!(lit_len, 1, "Copy3 literal length");
         assert_eq!(s, 7, "Source advanced by 6 bytes");
         Ok(())
@@ -302,8 +355,8 @@ mod tests {
     fn test_decode_copy3_boundary_lengths() -> Result<()> {
         // Test boundary values for Copy3 length encoding
         let test_cases = vec![
-            (0u8, COPY3_BASE_LENGTH),     // Minimum: 4 + 0 = 4 bytes
-            (60u8, COPY3_BASE_LENGTH),   // Maximum direct: 4 + 60 = 64 bytes
+            (0u8, COPY3_BASE_LENGTH),                   // Minimum: 4 + 0 = 4 bytes
+            (60u8, COPY3_BASE_LENGTH),                  // Maximum direct: 4 + 60 = 64 bytes
             (COPY3_LENGTH_1_BYTE, COPY3_EXTENDED_BASE), // Start of 1-byte extension: 64 + 0 = 64
             (COPY3_LENGTH_2_BYTE, COPY3_EXTENDED_BASE), // Start of 2-byte extension: 64 + 0 = 64
             (COPY3_LENGTH_3_BYTE, COPY3_EXTENDED_BASE), // Start of 3-byte extension: 64 + 0 = 64
@@ -325,16 +378,29 @@ mod tests {
             let mut s = 1;
             let (offset, length, _) = decode_copy3_safe(&src, &mut s, tag)?;
 
-            assert_eq!(offset, offset_21bit as usize + MIN_COPY3_OFFSET, "Offset for length_val {}", length_val);
+            assert_eq!(
+                offset,
+                offset_21bit as usize + MIN_COPY3_OFFSET,
+                "Offset for length_val {}",
+                length_val
+            );
             if length_val <= COPY3_LENGTH_MAX_DIRECT {
-                assert_eq!(length, expected_base + length_val as usize, "Direct length for length_val {}", length_val);
+                assert_eq!(
+                    length,
+                    expected_base + length_val as usize,
+                    "Direct length for length_val {}",
+                    length_val
+                );
             } else {
-                assert_eq!(length, expected_base, "Extension base for length_val {}", length_val);
+                assert_eq!(
+                    length, expected_base,
+                    "Extension base for length_val {}",
+                    length_val
+                );
             }
         }
         Ok(())
     }
-
 
     #[test]
     fn test_large_values_handling() -> Result<()> {
@@ -355,7 +421,11 @@ mod tests {
         let src = vec![bytes[0], bytes[1], bytes[2], bytes[3]]; // Include tag
         let mut s = 1;
         let (offset, _, _) = decode_copy3_safe(&src, &mut s, tag)?;
-        assert_eq!(offset, max_offset_21bit as usize + MIN_COPY3_OFFSET, "Maximum Copy3 offset");
+        assert_eq!(
+            offset,
+            max_offset_21bit as usize + MIN_COPY3_OFFSET,
+            "Maximum Copy3 offset"
+        );
 
         Ok(())
     }

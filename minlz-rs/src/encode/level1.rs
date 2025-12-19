@@ -80,12 +80,16 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
 
             // Check repeat at offset 1
             const CHECK_REP: usize = 1;
-            if (cv >> (CHECK_REP * 8)) as u32 == unsafe { load32_unchecked(src, s - repeat + CHECK_REP) } {
+            if (cv >> (CHECK_REP * 8)) as u32
+                == unsafe { load32_unchecked(src, s - repeat + CHECK_REP) }
+            {
                 let mut base = s + CHECK_REP;
 
                 // Extend backwards
-                while base > next_emit && s - repeat > 0 &&
-                      src[s - repeat + CHECK_REP - (s + CHECK_REP - base) - 1] == src[base - 1] {
+                while base > next_emit
+                    && s - repeat > 0
+                    && src[s - repeat + CHECK_REP - (s + CHECK_REP - base) - 1] == src[base - 1]
+                {
                     base -= 1;
                 }
 
@@ -133,12 +137,16 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             }
 
             // Check candidate matches
-            if candidate >= min_src_pos && (cv as u32) == unsafe { load32_unchecked(src, candidate) } {
+            if candidate >= min_src_pos
+                && (cv as u32) == unsafe { load32_unchecked(src, candidate) }
+            {
                 break;
             }
 
             candidate = table[hash2 as usize] as usize;
-            if candidate2 >= min_src_pos && ((cv >> 8) as u32) == unsafe { load32_unchecked(src, candidate2) } {
+            if candidate2 >= min_src_pos
+                && ((cv >> 8) as u32) == unsafe { load32_unchecked(src, candidate2) }
+            {
                 table[hash2 as usize] = (s + 2) as u32;
                 candidate = candidate2;
                 s += 1;
@@ -146,7 +154,9 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             }
 
             table[hash2 as usize] = (s + 2) as u32;
-            if candidate >= min_src_pos && ((cv >> 16) as u32) == unsafe { load32_unchecked(src, candidate) } {
+            if candidate >= min_src_pos
+                && ((cv >> 16) as u32) == unsafe { load32_unchecked(src, candidate) }
+            {
                 s += 2;
                 break;
             }
@@ -170,7 +180,8 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
         candidate += 4;
 
         while s <= src.len() - 8 {
-            let diff = unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate) };
+            let diff =
+                unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate) };
             if diff != 0 {
                 s += diff.trailing_zeros() as usize / 8;
                 break;
@@ -180,7 +191,6 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
         }
 
         let length = s - base;
-
 
         // Emit literals and copy
         if next_emit != base {
@@ -230,7 +240,9 @@ fn encode_block_large(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             table[m2_hash as usize] = (s - 2) as u32;
             table[curr_hash as usize] = s as u32;
 
-            if s - candidate > MAX_COPY3_OFFSET || (x as u32) != unsafe { load32_unchecked(src, candidate) } {
+            if s - candidate > MAX_COPY3_OFFSET
+                || (x as u32) != unsafe { load32_unchecked(src, candidate) }
+            {
                 cv = unsafe { load64_unchecked(src, s + 1) };
                 s += 1;
                 break;
@@ -303,12 +315,16 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
 
             // Check repeat
             const CHECK_REP: usize = 1;
-            if (cv >> (CHECK_REP * 8)) as u32 == unsafe { load32_unchecked(src, s - repeat + CHECK_REP) } {
+            if (cv >> (CHECK_REP * 8)) as u32
+                == unsafe { load32_unchecked(src, s - repeat + CHECK_REP) }
+            {
                 let mut base = s + CHECK_REP;
 
                 // Extend backwards
-                while base > next_emit && s - repeat > 0 &&
-                      src[s - repeat + CHECK_REP - (s + CHECK_REP - base) - 1] == src[base - 1] {
+                while base > next_emit
+                    && s - repeat > 0
+                    && src[s - repeat + CHECK_REP - (s + CHECK_REP - base) - 1] == src[base - 1]
+                {
                     base -= 1;
                 }
 
@@ -387,7 +403,8 @@ fn encode_block_64k(dst: &mut [u8], src: &[u8]) -> Result<usize> {
         candidate += 4;
 
         while s <= src.len() - 8 {
-            let diff = unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate) };
+            let diff =
+                unsafe { load64_unchecked(src, s) } ^ unsafe { load64_unchecked(src, candidate) };
             if diff != 0 {
                 s += diff.trailing_zeros() as usize / 8;
                 break;
@@ -483,7 +500,10 @@ mod tests {
 
         // Should compress (repeated pattern)
         assert!(result > 0, "Level 1 should compress highly repetitive data");
-        assert!(result < src.len(), "Compressed size should be smaller than original");
+        assert!(
+            result < src.len(),
+            "Compressed size should be smaller than original"
+        );
     }
 
     #[test]
@@ -496,8 +516,10 @@ mod tests {
         // Level 1 might not compress this pattern efficiently - that's OK
         // The result should be either compressed (result > 0) or
         // indicate that compression wasn't worthwhile (result == 0)
-        assert!(result == 0 || result < src.len(),
-                "Level 1 should either compress or indicate compression isn't worthwhile");
+        assert!(
+            result == 0 || result < src.len(),
+            "Level 1 should either compress or indicate compression isn't worthwhile"
+        );
     }
 
     #[test]
