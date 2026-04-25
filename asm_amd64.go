@@ -200,6 +200,13 @@ func emitCopyLits2(dst []byte, lits []byte, offset int, length int) int
 //go:noescape
 func emitCopyLits3(dst []byte, lits []byte, offset int, length int) int
 
+func emitRepeatLits(dst []byte, lits []byte, length int) int {
+	litFlag := len(lits) - 1
+	dst[0] = byte((length-4)<<4) | byte(litFlag<<3) | tagRepeat
+	copy(dst[1:], lits)
+	return 1 + len(lits)
+}
+
 // matchLen returns how many bytes match in a and b
 //
 // It assumes that:

@@ -76,6 +76,7 @@ function decodeBlock(src) {
     const dst = new Uint8Array(wantSize);
     let dstPos = 0;
     let offset = 1; // Repeat offset, starts at 1
+    let afterRepeat = false;
 
     // Helper functions
     const readOne = () => {
@@ -127,6 +128,29 @@ function decodeBlock(src) {
         switch (tagType) {
             case 0: { // Literal or Repeat
                 const isRepeat = (value & 1) !== 0;
+
+                if (afterRepeat && isRepeat) {
+                    // Repeat-after-repeat: bit3=litFlag, bits4-7=length
+                    const litCount = ((tag >> 3) & 1) + 1;
+                    length = (tag >> 4) + 4;
+                    opType = 'repeat';
+
+                    // Read embedded literals
+                    fusedLiterals = readN(litCount);
+                    if (fusedLiterals === null) throw new DecodeError(`repeat-lits: unable to read literals at dst pos ${dstPos}`);
+
+                    if (dstPos + litCount > wantSize) {
+                        throw new DecodeError(`repeat-lits: literal output size exceeded at dst pos ${dstPos}`);
+                    }
+                    dst.set(fusedLiterals, dstPos);
+                    dstPos += litCount;
+
+                    copyOffset = offset;
+                    copySourceStart = dstPos - offset;
+                    // afterRepeat stays true
+                    break;
+                }
+
                 value = value >> 1;
 
                 // Decode length
@@ -150,8 +174,10 @@ function decodeBlock(src) {
                     opType = 'repeat';
                     copyOffset = offset;
                     copySourceStart = dstPos - offset;
+                    afterRepeat = true;
                     // Fall through to copy execution below
                 } else {
+                    afterRepeat = false;
                     opType = 'literal';
                     literals = readN(length);
                     if (literals === null) throw new DecodeError(`literal length ${length} exceed source at dst pos ${dstPos}`);
@@ -178,6 +204,7 @@ function decodeBlock(src) {
             }
 
             case 1: { // Copy1 (10-bit offset)
+                afterRepeat = false;
                 opType = 'copy1';
                 length = value & 15;
                 const offByte = readOne();
@@ -200,6 +227,7 @@ function decodeBlock(src) {
             }
 
             case 2: { // Copy2 (16-bit offset)
+                afterRepeat = false;
                 opType = 'copy2';
                 const off = readTwo();
                 if (off === null) throw new DecodeError(`copy 2: unable to read offset at dst pos ${dstPos}`);
@@ -227,6 +255,7 @@ function decodeBlock(src) {
             }
 
             case 3: { // Fused Copy2 or Copy3
+                afterRepeat = false;
                 const isCopy3 = (value & 1) === 1;
                 let litLen = (value >> 1) & 3;
 
@@ -509,7 +538,13 @@ function renderTable() {
             const preview = Array.from(op.literals.slice(0, 8)).map(formatAscii).join('');
             tdDetails.innerHTML = `<span class="length-val">${op.length}</span> bytes: "${preview}${op.length > 8 ? '...' : ''}"`;
         } else if (op.type === 'repeat') {
-            tdDetails.innerHTML = `len=<span class="length-val">${op.copyLength}</span> off=<span class="offset-val">${op.copyOffset}</span>`;
+            let details = '';
+            if (op.fusedLiterals) {
+                const preview = Array.from(op.fusedLiterals).map(formatAscii).join('');
+                details = `lits=<span class="length-val">${op.fusedLiterals.length}</span> "${preview}" `;
+            }
+            details += `len=<span class="length-val">${op.copyLength}</span> off=<span class="offset-val">${op.copyOffset}</span>`;
+            tdDetails.innerHTML = details;
         } else {
             let details = '';
             if (op.fusedLiterals) {
@@ -594,7 +629,7 @@ function renderLegendStats() {
         let html = `<table>
             <tr><td>Count:</td><td>${s.count.toLocaleString()} (${pctOps}%)</td></tr>`;
 
-        if ((type === 'copy2' || type === 'copy3') && s.count > 0) {
+        if ((type === 'repeat' || type === 'copy2' || type === 'copy3') && s.count > 0) {
             const pctWithLits = (s.withLiterals / s.count * 100).toFixed(1);
             html += `<tr><td>With literals:</td><td>${s.withLiterals.toLocaleString()} (${pctWithLits}%)</td></tr>`;
             if (s.literalBytes > 0) {

@@ -69,6 +69,7 @@ func encodeBlockGo(dst, src []byte) (d int) {
 
 	// We search for a repeat at -1, but don't output repeats when nextEmit == 0
 	repeat := 1
+	lastWasRepeat := false
 	if debugEncode {
 		fmt.Println("encodeBlockGo: Starting encode")
 	}
@@ -104,11 +105,6 @@ func encodeBlockGo(dst, src []byte) (d int) {
 					return 0
 				}
 
-				d += emitLiteral(dst[d:], src[nextEmit:base])
-				if debugEncode {
-					fmt.Println(nextEmit, "(lits) length:", base-nextEmit, "d-after:", d)
-				}
-
 				// Extend forward
 				candidate := s - repeat + 4 + checkRep
 				s += 4 + checkRep
@@ -131,9 +127,25 @@ func encodeBlockGo(dst, src []byte) (d int) {
 						panic("mismatch")
 					}
 				}
-				d += emitRepeat(dst[d:], s-base)
+
+				nLits := base - nextEmit
+				matchLen := s - base
+				if lastWasRepeat && nLits >= 1 && nLits <= 2 && matchLen >= 4 && matchLen <= 11 {
+					d += emitRepeatLits(dst[d:], src[nextEmit:base], matchLen)
+					lastWasRepeat = true
+				} else if lastWasRepeat && nLits == 0 {
+					d += emitCopy(dst[d:], repeat, matchLen)
+					lastWasRepeat = repeat <= maxCopy1Offset && matchLen >= 274
+				} else {
+					d += emitLiteral(dst[d:], src[nextEmit:base])
+					if debugEncode {
+						fmt.Println(nextEmit, "(lits) length:", nLits, "d-after:", d)
+					}
+					d += emitRepeat(dst[d:], matchLen)
+					lastWasRepeat = true
+				}
 				if debugEncode {
-					fmt.Println(base, "(repeat) length:", s-base, "offset:", repeat, "d-after:", d)
+					fmt.Println(base, "(repeat) length:", matchLen, "offset:", repeat, "d-after:", d)
 				}
 				nextEmit = s
 				if s >= sLimit {
@@ -204,6 +216,7 @@ func encodeBlockGo(dst, src []byte) (d int) {
 		} else {
 			d += emitCopy(dst[d:], repeat, length)
 		}
+		lastWasRepeat = false
 		if debugEncode {
 			fmt.Println(base, "(copy) length:", s-base, "offset:", repeat, "d-after:", d)
 		}
@@ -259,6 +272,7 @@ func encodeBlockGo(dst, src []byte) (d int) {
 				candidate += 8
 			}
 			d += emitCopy(dst[d:], repeat, s-base)
+			lastWasRepeat = false
 			if debugEncode {
 				fmt.Println(base, "(copy) length:", s-base, "offset:", repeat, "d-after:", d)
 			}
@@ -313,6 +327,7 @@ func encodeBlockGo64K(dst, src []byte) (d int) {
 
 	// We search for a repeat at -1, but don't output repeats when nextEmit == 0
 	repeat := 1
+	lastWasRepeat := false
 	if debugEncode {
 		fmt.Println("encodeBlockGo: Starting encode")
 	}
@@ -347,11 +362,6 @@ func encodeBlockGo64K(dst, src []byte) (d int) {
 					return 0
 				}
 
-				d += emitLiteral(dst[d:], src[nextEmit:base])
-				if debugEncode {
-					fmt.Println(nextEmit, "(lits) length:", base-nextEmit, "d-after:", d)
-				}
-
 				// Extend forward
 				candidate := s - repeat + 4 + checkRep
 				s += 4 + checkRep
@@ -374,9 +384,25 @@ func encodeBlockGo64K(dst, src []byte) (d int) {
 						panic("mismatch")
 					}
 				}
-				d += emitRepeat(dst[d:], s-base)
+
+				nLits := base - nextEmit
+				matchLen := s - base
+				if lastWasRepeat && nLits >= 1 && nLits <= 2 && matchLen >= 4 && matchLen <= 11 {
+					d += emitRepeatLits(dst[d:], src[nextEmit:base], matchLen)
+					lastWasRepeat = true
+				} else if lastWasRepeat && nLits == 0 {
+					d += emitCopy(dst[d:], repeat, matchLen)
+					lastWasRepeat = repeat <= maxCopy1Offset && matchLen >= 274
+				} else {
+					d += emitLiteral(dst[d:], src[nextEmit:base])
+					if debugEncode {
+						fmt.Println(nextEmit, "(lits) length:", nLits, "d-after:", d)
+					}
+					d += emitRepeat(dst[d:], matchLen)
+					lastWasRepeat = true
+				}
 				if debugEncode {
-					fmt.Println(base, "(repeat) length:", s-base, "offset:", repeat, "d-after:", d)
+					fmt.Println(base, "(repeat) length:", matchLen, "offset:", repeat, "d-after:", d)
 				}
 				nextEmit = s
 				if s >= sLimit {
@@ -445,6 +471,7 @@ func encodeBlockGo64K(dst, src []byte) (d int) {
 		} else {
 			d += emitCopy(dst[d:], repeat, length)
 		}
+		lastWasRepeat = false
 		if debugEncode {
 			fmt.Println(base, "(copy) length:", s-base, "offset:", repeat, "d-after:", d)
 		}
@@ -500,6 +527,7 @@ func encodeBlockGo64K(dst, src []byte) (d int) {
 				candidate += 8
 			}
 			d += emitCopy(dst[d:], repeat, s-base)
+			lastWasRepeat = false
 			if debugEncode {
 				fmt.Println(base, "(copy) length:", s-base, "offset:", repeat, "d-after:", d)
 			}

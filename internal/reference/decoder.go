@@ -137,6 +137,7 @@ func DecodeBlock(src []byte) (dst []byte, err error) {
 	// Offset is retained between operations and initialized to 1.
 	// This is used for repeat offsets.
 	var offset = uint32(1)
+	afterRepeat := false
 
 	// While we have input left.
 	for len(src) > 0 {
@@ -152,6 +153,25 @@ func DecodeBlock(src []byte) (dst []byte, err error) {
 		// Literal/repeat tag
 		case 0:
 			isRepeat := value&1 != 0
+
+			if afterRepeat && isRepeat {
+				// Repeat-after-repeat: bit3=litFlag, bits4-7=length
+				litCount := uint32((v>>3)&1) + 1
+				length = uint32(v>>4) + 4
+				if debug {
+					fmt.Println("repeat-after-repeat, lits:", litCount, "length:", length, "d-after:", uint32(len(dst))+litCount+length)
+				}
+				if !checkDstSize(litCount) {
+					return nil, fmt.Errorf("repeat-lits: literal output size exceeded at dst pos %d", len(dst))
+				}
+				input, ok := readN(litCount)
+				if !ok {
+					return nil, fmt.Errorf("repeat-lits: unable to read literals at dst pos %d", len(dst))
+				}
+				dst = append(dst, input...)
+				// afterRepeat stays true
+				break
+			}
 
 			// Decode length
 			value = value >> 1
@@ -185,10 +205,11 @@ func DecodeBlock(src []byte) (dst []byte, err error) {
 
 			// If repeat, break to copy.
 			if isRepeat {
-				// Copy with set length from repeat address
+				afterRepeat = true
 				break
 			}
 
+			afterRepeat = false
 			if debug {
 				fmt.Println("literals, length:", length, "d-after:", uint32(len(dst))+length)
 			}
@@ -208,6 +229,7 @@ func DecodeBlock(src []byte) (dst []byte, err error) {
 			continue
 
 		case 1:
+			afterRepeat = false
 			// Copy with 1 byte extra offset
 			length = value & 15
 			offset, ok = readOne()
@@ -229,6 +251,7 @@ func DecodeBlock(src []byte) (dst []byte, err error) {
 			offset++
 
 		case 2:
+			afterRepeat = false
 			// Copy with 2 byte offset.
 
 			// Read offset
@@ -268,6 +291,7 @@ func DecodeBlock(src []byte) (dst []byte, err error) {
 			offset += 64
 
 		case 3:
+			afterRepeat = false
 			// Fused Copy2 or Copy3
 
 			// If bit 3 is set this is a copy3 operation.

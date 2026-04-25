@@ -307,6 +307,19 @@ func emitCopyLits2(dst, lits []byte, offset, length int) int {
 	return copy(dst[3:], lits) + 3
 }
 
+// emitRepeatLits writes a repeat-after-repeat with 1-2 embedded literals.
+// MUST only be emitted when the previous operation in the byte stream was a repeat.
+// len(lits) must be 1 or 2, length must be 4-11.
+func emitRepeatLits(dst []byte, lits []byte, length int) int {
+	if debugEncode {
+		fmt.Println("(repeat-lits) lits:", len(lits), "length:", length)
+	}
+	litFlag := len(lits) - 1
+	dst[0] = byte((length-4)<<4) | byte(litFlag<<3) | tagRepeat
+	copy(dst[1:], lits)
+	return 1 + len(lits)
+}
+
 // emitCopyLits3 emit a 3 byte offset copy with literals.
 // len(lits) must be 1 - 3.
 // The caller should only call when the offset can contain a literal encoding.

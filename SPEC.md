@@ -93,7 +93,22 @@ Length follows the tag, and is encoded like this:
 Repeats are handled as copies, but with no offset specified. 
 See below how offsets are handled. 
 
-Literals follow the tag or extended length field. 
+Literals follow the tag or extended length field.
+
+A repeat following a repeat means...
+
+| Bits | Meaning  | Description                             |
+|------|----------|-----------------------------------------|
+| 0-1  | Tag      | Always 0                                |
+| 2    | Repeat   | Always 1                                |
+| 3    | Literals | Literals. 0 = 1 literal, 1 = 2 literals |
+| 4-7  | Length   | Length of repeat                        |
+
+| Value | Length                     | 
+|-------|----------------------------|
+| 0-7   | 4 + Value. Lengths 4 -> 11 | 
+
+Longer repeats or more literals should be emitted as literal + repeat.
 
 ### 2.2 Copies
 

@@ -183,6 +183,7 @@ func minLZDecodeGo(dst, src []byte) int {
 	}
 	var d, s, length int
 	offset := 1
+	afterRepeat := false
 
 	// As long as we can read at least 11 bytes... (longest code possible +4 lits)
 	for s < len(src)-11 {
@@ -194,6 +195,25 @@ func minLZDecodeGo(dst, src []byte) int {
 		switch load8(src, s) & 0x03 {
 		case tagLiteral:
 			v := load8(src, s)
+			if afterRepeat && v&4 != 0 {
+				// Repeat-after-repeat: bit3=litFlag, bits4-7=length
+				litCount := int((v>>3)&1) + 1
+				length = int(v>>4) + 4
+				s++
+				if debug {
+					fmt.Print(d, ": (repeat-after-repeat) lits:", litCount, " ")
+				}
+				if len(dst)-d < 4 {
+					if debugErrors {
+						fmt.Println("corrupt: repeat-lits dst avail:", len(dst)-d)
+					}
+					return decodeErrCodeCorrupt
+				}
+				store32(dst, d, load32(src, s))
+				d += litCount
+				s += litCount
+				goto docopy
+			}
 			x := v >> 3
 			switch {
 			case x < 29:
@@ -216,8 +236,10 @@ func minLZDecodeGo(dst, src []byte) int {
 				if debug {
 					fmt.Print(d, ": (repeat)")
 				}
+				afterRepeat = true
 				goto docopy
 			}
+			afterRepeat = false
 			if length > len(dst)-d || length > len(src)-s {
 				if debugErrors {
 					fmt.Println("corrupt: lit size", length, "dst avail:", len(dst)-d, "src avail:", len(src)-s, "dst pos:", d)
@@ -234,6 +256,7 @@ func minLZDecodeGo(dst, src []byte) int {
 			continue
 
 		case tagCopy1:
+			afterRepeat = false
 			if debug {
 				fmt.Print(d, ": (copy1) ")
 			}
@@ -248,6 +271,7 @@ func minLZDecodeGo(dst, src []byte) int {
 				s += 2
 			}
 		case tagCopy2:
+			afterRepeat = false
 			if debug {
 				fmt.Print(d, ": (copy2)")
 			}
@@ -272,6 +296,7 @@ func minLZDecodeGo(dst, src []byte) int {
 			}
 			offset += minCopy2Offset
 		case 0x3:
+			afterRepeat = false
 			val := load32(src, s)
 			isCopy3 := val&4 != 0
 			litLen := int(val>>3) & 3
@@ -366,6 +391,24 @@ func minLZDecodeGo(dst, src []byte) int {
 		switch load8(src, s) & 0x03 {
 		case tagLiteral:
 			v := load8(src, s)
+			if afterRepeat && v&4 != 0 {
+				litCount := int((v>>3)&1) + 1
+				length = int(v>>4) + 4
+				s++
+				if debug {
+					fmt.Print(d, ": (repeat-after-repeat) lits:", litCount, " ")
+				}
+				if litCount > len(dst)-d || s+litCount > len(src) {
+					if debugErrors {
+						fmt.Println("corrupt: repeat-lits size", litCount, "dst avail:", len(dst)-d, "src avail:", len(src)-s)
+					}
+					return decodeErrCodeCorrupt
+				}
+				copy(dst[d:], src[s:s+litCount])
+				d += litCount
+				s += litCount
+				goto doCopy2
+			}
 			x := v >> 3
 			switch {
 			case x < 29:
@@ -406,8 +449,10 @@ func minLZDecodeGo(dst, src []byte) int {
 				if debug {
 					fmt.Print(d, ": (repeat)")
 				}
+				afterRepeat = true
 				goto doCopy2
 			}
+			afterRepeat = false
 
 			if length > len(dst)-d || length > len(src)-s {
 				if debugErrors {
@@ -429,6 +474,7 @@ func minLZDecodeGo(dst, src []byte) int {
 			continue
 
 		case tagCopy1:
+			afterRepeat = false
 			if debug {
 				fmt.Print(d, ": (copy1 -wut?) ")
 			}
@@ -455,6 +501,7 @@ func minLZDecodeGo(dst, src []byte) int {
 				length += 4
 			}
 		case tagCopy2:
+			afterRepeat = false
 			if debug {
 				fmt.Print(d, ": (copy2) ")
 			}
@@ -502,6 +549,7 @@ func minLZDecodeGo(dst, src []byte) int {
 			}
 			offset += minCopy2Offset
 		case 0x3:
+			afterRepeat = false
 			s += 4
 			if s > len(src) {
 				if debugErrors {

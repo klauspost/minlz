@@ -93,6 +93,7 @@ func encodeBlockBest(dst, src []byte, dict *dict) (d int) {
 	// bytes to copy, so we start looking for hash matches at s == 1.
 	s := 1
 	repeat := 1
+	lastWasRepeat := false
 	if dict != nil {
 		//dict.initBest()
 		s = 0
@@ -536,9 +537,19 @@ func encodeBlockBest(dst, src []byte, dict *dict) (d int) {
 			if debug {
 				fmt.Println("REPEAT, length", best.length, "offset:", offset, "s-after:", s, "dict:", best.dict, "best:", best)
 			}
-			d += emitLiteral(dst[d:], src[nextEmit:base])
-			// same as `d := emitCopy(dst[d:], repeat, s-base)` but skips storing offset.
-			d += emitRepeat(dst[d:], best.length)
+			nLits := base - nextEmit
+			if lastWasRepeat && nLits >= 1 && nLits <= 2 && best.length >= 4 && best.length <= 11 {
+				d += emitRepeatLits(dst[d:], src[nextEmit:base], best.length)
+				lastWasRepeat = true
+			} else if lastWasRepeat && nLits == 0 {
+				d += emitCopy(dst[d:], offset, best.length)
+				lastWasRepeat = offset <= maxCopy1Offset && best.length >= 274
+			} else {
+				d += emitLiteral(dst[d:], src[nextEmit:base])
+				// same as `d := emitCopy(dst[d:], repeat, s-base)` but skips storing offset.
+				d += emitRepeat(dst[d:], best.length)
+				lastWasRepeat = true
+			}
 		} else {
 			lits := src[nextEmit:base]
 			if debug {
@@ -553,8 +564,10 @@ func encodeBlockBest(dst, src []byte, dict *dict) (d int) {
 							// Size is equal.
 							// Prefer Copy2, since it decodes faster
 							d += encodeCopy2(dst[d:], offset, best.length)
+							lastWasRepeat = false
 						} else {
 							d += emitCopy(dst[d:], offset, best.length)
+							lastWasRepeat = offset <= maxCopy1Offset && best.length >= 274
 						}
 					} else {
 						if best.length > 11 {
@@ -562,8 +575,10 @@ func encodeBlockBest(dst, src []byte, dict *dict) (d int) {
 							// We might as well do a search for a better match.
 							d += emitCopyLits2(dst[d:], lits, offset, 11)
 							s = best.s + 11
+							lastWasRepeat = false
 						} else {
 							d += emitCopyLits2(dst[d:], lits, offset, best.length)
+							lastWasRepeat = best.length > copy2LitMaxLen
 						}
 					}
 				} else {
@@ -571,8 +586,10 @@ func encodeBlockBest(dst, src []byte, dict *dict) (d int) {
 					if len(lits) > maxCopy3Lits {
 						d += emitLiteral(dst[d:], lits)
 						d += emitCopy(dst[d:], offset, best.length)
+						lastWasRepeat = offset <= maxCopy1Offset && best.length >= 274
 					} else {
 						d += emitCopyLits3(dst[d:], lits, offset, best.length)
+						lastWasRepeat = false
 					}
 				}
 			} else {
@@ -580,8 +597,10 @@ func encodeBlockBest(dst, src []byte, dict *dict) (d int) {
 					// Size is equal.
 					// Prefer Copy2, since it decodes faster
 					d += encodeCopy2(dst[d:], offset, best.length)
+					lastWasRepeat = false
 				} else {
 					d += emitCopy(dst[d:], offset, best.length)
+					lastWasRepeat = offset <= maxCopy1Offset && best.length >= 274
 				}
 			}
 		}
@@ -675,6 +694,11 @@ func emitRepeatSize(length int) int {
 		return 3
 	}
 	return 4
+}
+
+// emitRepeatLitsSize returns the number of bytes required to encode a repeat-after-repeat with literals.
+func emitRepeatLitsSize(litCount, length int) int {
+	return 1 + litCount
 }
 
 // emitCopy2Size returns the number of bytes required to encode a copy2.

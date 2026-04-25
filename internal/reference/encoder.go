@@ -114,6 +114,7 @@ func encodeBlock(dst, src []byte) (res []byte) {
 	s := 1
 
 	repeat := 1
+	lastWasRepeat := false
 	if debug {
 		fmt.Println("encodeBlockGo: Starting encode")
 	}
@@ -172,48 +173,73 @@ func encodeBlock(dst, src []byte) (res []byte) {
 		// or where encoding isn't better than emitting literals.
 
 		// Check if we have any literals we must emit.
-		if nextEmit != base {
-			// Grab the literals we must emit before the match
+		nLits := base - nextEmit
+		if nLits > 0 {
 			literals := src[nextEmit:base]
 
-			// Check if we can fuse the literals with the copy
-			// Second check can be omitted at a minor compression loss.
-			canFuse := (len(literals) <= 3 || (offset <= 65535+64 && len(literals) <= 4)) && offset >= 64
-			if canFuse {
-				if offset <= 65535+64 {
-					dst = emitCopyLits2(dst, literals, offset, length)
-					// In cases where offset is <= 1024 and length is between 12 and 18 a literal+copy1 is 1 byte less.
-					// The gain of adding this case it typically very small.
-				} else {
-					dst = emitCopy3(dst, offset, length, literals)
-				}
-				if debug {
-					fmt.Println(base-len(literals), "Fused Copy - literals:", len(literals), "length:", length, "offset:", offset, "d-after:", len(dst))
-				}
-				// Set to 0, since we emitted the copy.
+			// Check for repeat-after-repeat optimization
+			if lastWasRepeat && nLits <= 2 && offset == repeat && length >= 4 && length <= 11 {
+				dst = emitRepeatLitsRef(dst, literals, length)
+				lastWasRepeat = true
 				length = 0
-			} else {
-				// Emit literals separately.
-				// Bail if we will exceed the maximum size.
-				// We will not exceed dstLimit with the other encodings.
-				if len(dst)+len(literals) > dstLimit {
-					return nil
-				}
-				dst = emitLiterals(dst, literals)
 				if debug {
-					fmt.Println(base-len(literals), "Literals:", len(literals), "d-after:", len(dst))
+					fmt.Println(base-nLits, "Repeat-after-repeat - lits:", nLits, "length:", length, "d-after:", len(dst))
+				}
+			} else {
+				// Check if we can fuse the literals with the copy
+				canFuse := (len(literals) <= 3 || (offset <= 65535+64 && len(literals) <= 4)) && offset >= 64
+				if canFuse {
+					if offset <= 65535+64 {
+						dst = emitCopyLits2(dst, literals, offset, length)
+						lastWasRepeat = length > 11
+					} else {
+						dst = emitCopy3(dst, offset, length, literals)
+						lastWasRepeat = false
+					}
+					if debug {
+						fmt.Println(base-len(literals), "Fused Copy - literals:", len(literals), "length:", length, "offset:", offset, "d-after:", len(dst))
+					}
+					length = 0
+				} else {
+					// Emit literals separately.
+					if len(dst)+len(literals) > dstLimit {
+						return nil
+					}
+					dst = emitLiterals(dst, literals)
+					lastWasRepeat = false
+					if debug {
+						fmt.Println(base-len(literals), "Literals:", len(literals), "d-after:", len(dst))
+					}
 				}
 			}
 		}
 		if length > 0 {
 			if offset == repeat {
-				dst = emitRepeat(dst, length)
+				if lastWasRepeat {
+					// Safety: bare repeat after repeat would be misinterpreted.
+					if offset <= 1024 {
+						dst = emitCopy1(dst, offset, length)
+						lastWasRepeat = offset <= 1024 && length > 273
+					} else if offset <= 65535+64 {
+						dst = emitCopy2(dst, offset, length)
+						lastWasRepeat = false
+					} else {
+						dst = emitCopy3(dst, offset, length, nil)
+						lastWasRepeat = false
+					}
+				} else {
+					dst = emitRepeat(dst, length)
+					lastWasRepeat = true
+				}
 			} else if offset <= 1024 {
 				dst = emitCopy1(dst, offset, length)
+				lastWasRepeat = length > 273
 			} else if offset <= 65535+64 {
 				dst = emitCopy2(dst, offset, length)
+				lastWasRepeat = false
 			} else {
 				dst = emitCopy3(dst, offset, length, nil)
+				lastWasRepeat = false
 			}
 			if debug {
 				fmt.Println(base, "Copy - length:", length, "offset:", offset, "d-after:", len(dst))
@@ -344,6 +370,15 @@ func emitRepeat(dst []byte, length int) []byte {
 
 	// Only add 3 lowest bytes.
 	return append(dst, tmp[:3]...)
+}
+
+// emitRepeatLitsRef writes a repeat-after-repeat with 1-2 embedded literals.
+// len(lits) must be 1 or 2, length must be 4-11.
+func emitRepeatLitsRef(dst, lits []byte, length int) []byte {
+	litFlag := len(lits) - 1
+	const tagRepeat = 0 | 4
+	dst = append(dst, byte((length-4)<<4)|byte(litFlag<<3)|tagRepeat)
+	return append(dst, lits...)
 }
 
 // emitCopy1 encodes a match with 10 bit offset. Length must be at least 4.
