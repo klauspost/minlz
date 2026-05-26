@@ -1,0 +1,43 @@
+[package]
+name = "minlz-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+rust-version = "1.75"
+
+# Stand-alone manifest (cargo-fuzz convention) — do not roll up into the
+# parent workspace.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.minlz]
+path = ".."
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "decode_arbitrary"
+path = "fuzz_targets/decode_arbitrary.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "roundtrip"
+path = "fuzz_targets/roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "max_encoded_len"
+path = "fuzz_targets/max_encoded_len.rs"
+test = false
+doc = false
+bench = false

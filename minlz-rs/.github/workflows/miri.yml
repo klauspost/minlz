@@ -1,0 +1,37 @@
+name: Miri
+
+# Miri is slow (50–100× native).  Run on push to main + manual dispatch;
+# skip on PRs to keep them snappy.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"   # weekly Monday 06:00 UTC
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  miri:
+    name: cargo miri test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: miri
+      - name: Miri setup
+        run: cargo miri setup
+      # Heavy tests are #[cfg_attr(miri, ignore)]'d in source; the lighter
+      # set takes ~15 min on a 4-core runner.
+      - name: cargo +nightly miri test --lib
+        run: cargo +nightly miri test --lib
+        env:
+          # Tree borrows would also work; stacked borrows is the
+          # historical default and catches the bugs we care about.
+          MIRIFLAGS: -Zmiri-strict-provenance

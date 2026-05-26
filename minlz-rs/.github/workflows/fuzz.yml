@@ -1,0 +1,104 @@
+name: Fuzz
+
+# Short fuzz pass per target on every push to main + nightly cron.
+# Long-form fuzzing (≥ 20 min × 3 targets) happens locally per the
+# `crates/minlz/fuzz/RUNBOOK.md` checklist before tagged releases.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 4 * * *"   # every night 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      duration_secs:
+        description: "Seconds per target (default 300)"
+        required: false
+        default: "300"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fuzz:
+    name: cargo fuzz run (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [decode_arbitrary, roundtrip, max_encoded_len]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/minlz/fuzz -> target
+          key: fuzz-${{ matrix.target }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # Persistent corpus across runs.  Save under `cache:` so each
+      # subsequent run starts from the prior coverage frontier.
+      - name: Restore corpus cache
+        id: cache-corpus
+        uses: actions/cache@v4
+        with:
+          path: crates/minlz/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      # Seed corpus.  Checks two layouts:
+      #   1. in-tree: minlz-rs nested under the Go repo (current dev layout)
+      #   2. standalone: a `testdata/fuzz/` folder at repo root
+      # Both are best-effort (|| true).  Once the corpus is cached by a
+      # prior run, this step's contribution is incremental.
+      - name: Seed corpus from testdata zips
+        run: |
+          set -eux
+          cd crates/minlz/fuzz
+          mkdir -p corpus/${{ matrix.target }}
+          for base in "$GITHUB_WORKSPACE/testdata" "$GITHUB_WORKSPACE/../minlz/testdata"; do
+              [[ -d "$base/fuzz" ]] || continue
+              case "${{ matrix.target }}" in
+                decode_arbitrary)
+                  unzip -o -q "$base/fuzz/block-corpus-raw.zip" -d corpus/${{ matrix.target }} || true
+                  unzip -o -q "$base/fuzz/block-corpus-dec.zip" -d corpus/${{ matrix.target }} || true
+                  unzip -o -q "$base/fuzz/block-corpus-enc.zip" -d corpus/${{ matrix.target }} || true
+                  ;;
+                roundtrip|max_encoded_len)
+                  unzip -o -q "$base/fuzz/block-corpus-raw.zip" -d corpus/${{ matrix.target }} || true
+                  unzip -o -q "$base/enc_regressions.zip"        -d corpus/${{ matrix.target }} || true
+                  ;;
+              esac
+          done
+          echo "$(find corpus/${{ matrix.target }} -type f | wc -l) seeds"
+
+      - name: Fuzz
+        run: |
+          cd crates/minlz/fuzz
+          DUR="${{ github.event.inputs.duration_secs || '300' }}"
+          cargo +nightly fuzz run "${{ matrix.target }}" -- \
+              -max_total_time="$DUR" \
+              -jobs="$(nproc)" -workers="$(nproc)" \
+              -max_len=1048576
+
+      - name: Upload crash artifacts (if any)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: crates/minlz/fuzz/artifacts/${{ matrix.target }}/
+
+      - name: Upload coverage-growth corpus
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          path: crates/minlz/fuzz/corpus/${{ matrix.target }}/
+          retention-days: 7

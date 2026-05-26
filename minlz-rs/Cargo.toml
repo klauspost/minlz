@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/minlz"]
+# The cargo-fuzz crate at `crates/minlz/fuzz` is a stand-alone manifest
+# (its own `[workspace]` block) and is not part of this workspace.
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+repository = "https://github.com/minio/minlz-rs"
+authors = ["MinIO Inc."]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
