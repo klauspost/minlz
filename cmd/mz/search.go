@@ -1,3 +1,17 @@
+// Copyright 2026 MinIO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
@@ -179,6 +193,11 @@ func searchFile(file string, pattern []byte, opts searchOpts) (found bool, stats
 	matchCount := 0
 	lineOffset := int64(1)
 	lastLineStart := int64(-1)
+	// contigEnd is the stream offset just past the last block a match was
+	// resolved in — used to detect that a still-open line (one with no newline
+	// in the current or previous block) continues contiguously from an earlier
+	// block, so it keeps a single dedup key across all the blocks it spans.
+	contigEnd := int64(-1)
 
 	err = searcher.Search(pattern, func(r minlz.SearchResult) error {
 		found = true
@@ -192,12 +211,18 @@ func searchFile(file string, pattern []byte, opts searchOpts) (found bool, stats
 		}
 
 		if opts.lines {
-			// Count each matching line once. Dedup by the line's start offset —
-			// found by scanning back, into the previous block only when the line
-			// begins there — rather than by its end. This keeps a line that
-			// straddles a block boundary and matches in both halves counted once,
-			// matching grep/rg.
-			ls := lineStartOffset(r)
+			// Count each matching line once, keyed by the line's start offset.
+			// A match with no preceding newline in the current or previous block
+			// belongs to a line that began earlier; if that block is contiguous
+			// with the run we've scanned, reuse the open line's key so a line
+			// spanning more than two blocks (e.g. newline-sparse data) is counted
+			// once, not once per block. Two-block straddles resolve via the
+			// previous block, matching grep/rg.
+			ls, found := lineStartOffset(r)
+			if !found && lastLineStart >= 0 && r.BlockStart <= contigEnd {
+				ls = lastLineStart
+			}
+			contigEnd = r.BlockStart + int64(r.PrevBlockLen) + int64(len(r.Blocks[1]))
 			if ls == lastLineStart {
 				return nil
 			}
@@ -242,24 +267,27 @@ func searchFile(file string, pattern []byte, opts searchOpts) (found bool, stats
 }
 
 // lineStartOffset returns the absolute stream offset of the start of the line
-// containing the match. It scans the current block back to the preceding
-// newline and only consults the previous block (via PrevBlock, which may lazily
-// decode) when the line begins before the current block — so counting a line
-// that lies within one block never touches the previous block.
-func lineStartOffset(r minlz.SearchResult) int64 {
+// containing the match, and whether a preceding newline was actually found. It
+// scans the current block back to the preceding newline and only consults the
+// previous block (via PrevBlock, which may lazily decode) when the line begins
+// before the current block — so counting a line that lies within one block
+// never touches the previous block. When no newline is found in either block
+// (the line began before them) it returns (r.BlockStart, false); the caller
+// recovers the true start from carried continued-line state.
+func lineStartOffset(r minlz.SearchResult) (int64, bool) {
 	pl := r.PrevBlockLen
 	if posInCur := r.Offset - pl; posInCur > 0 {
 		if nl := bytes.LastIndexByte(r.Blocks[1][:posInCur], '\n'); nl >= 0 {
-			return r.BlockStart + int64(pl+nl+1)
+			return r.BlockStart + int64(pl+nl+1), true
 		}
 	}
 	prev := r.PrevBlock()
 	if end := min(r.Offset, len(prev)); end > 0 {
 		if nl := bytes.LastIndexByte(prev[:end], '\n'); nl >= 0 {
-			return r.BlockStart + int64(nl+1)
+			return r.BlockStart + int64(nl+1), true
 		}
 	}
-	return r.BlockStart
+	return r.BlockStart, false
 }
 
 // extractLine returns the line containing the match. It copies only the line's
@@ -268,10 +296,32 @@ func lineStartOffset(r minlz.SearchResult) int64 {
 // line straddles the boundary. The line is truncated at the current block's end
 // if it continues into the next block (no forward block is fetched).
 func extractLine(r minlz.SearchResult, pattern []byte) string {
-	prev := r.PrevBlock()
 	cur := r.Blocks[1]
-	pl := len(prev)
+	// Match start relative to the current block (PrevBlockLen is known without
+	// decoding prev). <0 means the match itself begins in the previous block.
+	mInCur := r.Offset - r.PrevBlockLen
 
+	// Fast path: the match is in the current block. The line end is found by
+	// scanning forward within cur (a line continuing past the block is truncated
+	// here — no next block is fetched), so it never needs prev. If the line start
+	// is also within cur, the whole line lives here and we return it without
+	// calling PrevBlock (which would lazily decode a skipped previous block).
+	if mInCur >= 0 {
+		end := len(cur)
+		if e := mInCur + len(pattern); e <= len(cur) {
+			if nl := bytes.IndexByte(cur[e:], '\n'); nl >= 0 {
+				end = e + nl
+			}
+		}
+		if nl := bytes.LastIndexByte(cur[:mInCur], '\n'); nl >= 0 {
+			return string(cur[nl+1 : end])
+		}
+	}
+
+	// The line's start (or the match itself) crosses into the previous block;
+	// fetch it now and use the logical prev||cur boundary logic.
+	prev := r.PrevBlock()
+	pl := len(prev)
 	start := 0
 	if nl := lastNewline(prev, cur, r.Offset); nl >= 0 {
 		start = nl + 1
