@@ -178,7 +178,7 @@ func searchFile(file string, pattern []byte, opts searchOpts) (found bool, stats
 
 	matchCount := 0
 	lineOffset := int64(1)
-	lastLineEnd := int64(-1)
+	lastLineStart := int64(-1)
 
 	err = searcher.Search(pattern, func(r minlz.SearchResult) error {
 		found = true
@@ -192,17 +192,21 @@ func searchFile(file string, pattern []byte, opts searchOpts) (found bool, stats
 		}
 
 		if opts.lines {
-			// Skip matches within an already-emitted line.
-			if r.StreamOffset < lastLineEnd {
+			// Count each matching line once. Dedup by the line's start offset —
+			// found by scanning back, into the previous block only when the line
+			// begins there — rather than by its end. This keeps a line that
+			// straddles a block boundary and matches in both halves counted once,
+			// matching grep/rg.
+			ls := lineStartOffset(r)
+			if ls == lastLineStart {
 				return nil
 			}
+			lastLineStart = ls
 			if opts.count {
-				lastLineEnd = r.StreamOffset + int64(lineEndOffset(r, pattern))
 				matchCount++
 				return nil
 			}
-			line, endOff := extractLine(r, pattern)
-			lastLineEnd = r.StreamOffset + int64(endOff)
+			line := extractLine(r, pattern)
 			matchCount++
 			if opts.lineNums {
 				fmt.Printf("%s%d:%d:%s\n", prefix, lineOffset, r.StreamOffset, line)
@@ -237,38 +241,91 @@ func searchFile(file string, pattern []byte, opts searchOpts) (found bool, stats
 	return found, stats, nil
 }
 
-// lineEndOffset returns the distance from the match start to the end of its line.
-// Avoids allocating by searching Blocks[1] directly.
-func lineEndOffset(r minlz.SearchResult, pattern []byte) int {
-	posInBlk := r.Offset - r.PrevBlockLen
-	after := max(posInBlk+len(pattern), 0)
-	blk := r.Blocks[1]
-	if after < len(blk) {
-		if idx := bytes.IndexByte(blk[after:], '\n'); idx >= 0 {
-			return after - posInBlk + idx
+// lineStartOffset returns the absolute stream offset of the start of the line
+// containing the match. It scans the current block back to the preceding
+// newline and only consults the previous block (via PrevBlock, which may lazily
+// decode) when the line begins before the current block — so counting a line
+// that lies within one block never touches the previous block.
+func lineStartOffset(r minlz.SearchResult) int64 {
+	pl := r.PrevBlockLen
+	if posInCur := r.Offset - pl; posInCur > 0 {
+		if nl := bytes.LastIndexByte(r.Blocks[1][:posInCur], '\n'); nl >= 0 {
+			return r.BlockStart + int64(pl+nl+1)
 		}
 	}
-	return len(blk) - posInBlk
+	prev := r.PrevBlock()
+	if end := min(r.Offset, len(prev)); end > 0 {
+		if nl := bytes.LastIndexByte(prev[:end], '\n'); nl >= 0 {
+			return r.BlockStart + int64(nl+1)
+		}
+	}
+	return r.BlockStart
 }
 
-// extractLine extracts the full line containing the match.
-// Returns the line and the distance from the match start to the line end.
-func extractLine(r minlz.SearchResult, pattern []byte) (string, int) {
+// extractLine returns the line containing the match. It copies only the line's
+// bytes (never whole blocks): a sub-slice of one block when the line fits in it,
+// or the previous block's tail joined with the current block's head when the
+// line straddles the boundary. The line is truncated at the current block's end
+// if it continues into the next block (no forward block is fetched).
+func extractLine(r minlz.SearchResult, pattern []byte) string {
 	prev := r.PrevBlock()
-	data := append(prev, r.Blocks[1]...)
-	matchPos := r.Offset
+	cur := r.Blocks[1]
+	pl := len(prev)
 
-	lineStart := bytes.LastIndexByte(data[:matchPos], '\n')
-	if lineStart < 0 {
-		lineStart = 0
-	} else {
-		lineStart++
+	start := 0
+	if nl := lastNewline(prev, cur, r.Offset); nl >= 0 {
+		start = nl + 1
 	}
-	lineEnd := bytes.IndexByte(data[matchPos+len(pattern):], '\n')
-	if lineEnd < 0 {
-		lineEnd = len(data)
-	} else {
-		lineEnd += matchPos + len(pattern)
+	end := pl + len(cur)
+	if nl := firstNewline(prev, cur, r.Offset+len(pattern)); nl >= 0 {
+		end = nl
 	}
-	return string(data[lineStart:lineEnd]), lineEnd - matchPos
+
+	switch {
+	case end <= pl:
+		return string(prev[start:end])
+	case start >= pl:
+		return string(cur[start-pl : end-pl])
+	default:
+		buf := make([]byte, 0, end-start)
+		buf = append(buf, prev[start:]...)
+		buf = append(buf, cur[:end-pl]...)
+		return string(buf)
+	}
+}
+
+// lastNewline returns the index of the last '\n' strictly before upto in the
+// logical buffer prev||cur, or -1. firstNewline returns the index of the first
+// '\n' at or after from. Both index the concatenation without materializing it.
+func lastNewline(prev, cur []byte, upto int) int {
+	pl := len(prev)
+	if upto > pl {
+		if i := bytes.LastIndexByte(cur[:upto-pl], '\n'); i >= 0 {
+			return pl + i
+		}
+		upto = pl
+	}
+	if upto > 0 {
+		return bytes.LastIndexByte(prev[:min(upto, pl)], '\n')
+	}
+	return -1
+}
+
+func firstNewline(prev, cur []byte, from int) int {
+	pl := len(prev)
+	if from < 0 {
+		from = 0
+	}
+	if from < pl {
+		if i := bytes.IndexByte(prev[from:], '\n'); i >= 0 {
+			return from + i
+		}
+		from = pl
+	}
+	if from-pl < len(cur) {
+		if i := bytes.IndexByte(cur[from-pl:], '\n'); i >= 0 {
+			return from + i
+		}
+	}
+	return -1
 }
