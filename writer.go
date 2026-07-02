@@ -330,9 +330,10 @@ func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		return int64(len(buf)), w.AsyncFlush()
 	}
+	smc := w.searchMaxChunk
 	for {
-		inbuf := w.buffers.Get().([]byte)[:w.blockSize+obufHeaderLen]
-		n2, err := io.ReadFull(r, inbuf[obufHeaderLen:])
+		inbuf := w.buffers.Get().([]byte)[:smc+w.blockSize+obufHeaderLen]
+		n2, err := io.ReadFull(r, inbuf[smc+obufHeaderLen:])
 		if err != nil {
 			if err == io.ErrUnexpectedEOF {
 				err = io.EOF
@@ -345,7 +346,7 @@ func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 			break
 		}
 		n += int64(n2)
-		err2 := w.writeFull(inbuf[:n2+obufHeaderLen])
+		err2 := w.writeFull(inbuf[:smc+n2+obufHeaderLen])
 		if w.err(err2) != nil {
 			break
 		}
@@ -525,9 +526,10 @@ func (w *Writer) EncodeBuffer(buf []byte) (err error) {
 			dbuf[6] = uint8(checksum >> 16)
 			dbuf[7] = uint8(checksum >> 24)
 
-			// Only index compressible blocks.
+			// Index compressible blocks; also incompressible blocks when a prefix
+			// is set (prefix tables stay sparse; no-prefix ones would be dropped).
 			searchLen := 0
-			if searchCfg != nil && n2 > 0 {
+			if searchCfg != nil && (n2 > 0 || searchCfg.hasPrefix()) {
 				var stBuf []byte
 				if v := searchTablePool.Get(); v != nil {
 					stBuf = v.([]byte)
@@ -644,13 +646,16 @@ func (w *Writer) write(p []byte, final, omitTrailing bool) (nRet int, errRet err
 			copy(overlap, p[:end])
 		}
 
-		// Copy input.
-		// If the block is incompressible, this is used for the result.
+		// Copy the caller's input into a pool buffer (p must not be retained).
+		// Reserve smc bytes in front: if the block turns out incompressible its
+		// buffer becomes the output, and this headroom lets the search chunk be
+		// prepended in place — matching compressed blocks — instead of copying
+		// the whole block.
 		smc := w.searchMaxChunk
-		inbuf := w.buffers.Get().([]byte)[:len(uncompressed)+obufHeaderLen]
+		inbuf := w.buffers.Get().([]byte)[:smc+len(uncompressed)+obufHeaderLen]
 		obuf := w.buffers.Get().([]byte)[:w.obufLen]
-		copy(inbuf[obufHeaderLen:], uncompressed)
-		uncompressed = inbuf[obufHeaderLen:]
+		copy(inbuf[smc+obufHeaderLen:], uncompressed)
+		uncompressed = inbuf[smc+obufHeaderLen:]
 
 		// A flushed/final block without full overlap omits its table (pass a nil
 		// config to the goroutine): a boundary-incomplete table could hide a
@@ -682,8 +687,10 @@ func (w *Writer) write(p []byte, final, omitTrailing bool) (nRet int, errRet err
 				chunkLen = 4 + n + n2
 				dbuf = dbuf[:obufHeaderLen+n+n2]
 			} else {
+				// Incompressible: the raw data's buffer (inbuf, with smc headroom
+				// in front) becomes the output; the scratch obuf is freed.
 				obuf, inbuf = inbuf, obuf
-				dbuf = obuf
+				dbuf = obuf[smc:]
 			}
 
 			dbuf[0] = chunkType
@@ -695,17 +702,18 @@ func (w *Writer) write(p []byte, final, omitTrailing bool) (nRet int, errRet err
 			dbuf[6] = uint8(checksum >> 16)
 			dbuf[7] = uint8(checksum >> 24)
 
-			// Only index compressible blocks.
+			// Index compressible blocks; also incompressible blocks when a prefix
+			// is set (prefix tables stay sparse; no-prefix ones would be dropped).
 			searchLen := 0
-			if searchCfg != nil && n2 > 0 {
+			if searchCfg != nil && (n2 > 0 || searchCfg.hasPrefix()) {
 				var stBuf []byte
 				if v := searchTablePool.Get(); v != nil {
 					stBuf = v.([]byte)
 				}
 				table, reductions := searchCfg.buildSearchTable(uncompressed, overlap, stBuf, searchCfg.shouldPack(w.concurrency))
 				if table != nil {
-					// obuf still points to the pool buffer with smc space at front.
-					searchLen = len(w.appendSearchTableEitherChunk(inbuf[:0], reductions, table))
+					// Data is at obuf[smc:]; the chunk prepends into the free front.
+					searchLen = len(w.appendSearchTableEitherChunk(obuf[:0], reductions, table))
 				}
 				searchTablePool.Put(table)
 			}
@@ -713,27 +721,20 @@ func (w *Writer) write(p []byte, final, omitTrailing bool) (nRet int, errRet err
 			if w.sidecar != nil {
 				// Sidecar mode: data chunk to main; search chunk + 0x47 to sidecar.
 				if searchLen > 0 {
-					res.sidecarPre = append([]byte(nil), inbuf[:searchLen]...)
+					res.sidecarPre = append([]byte(nil), obuf[:searchLen]...)
 				}
 				res.uncompSize = len(uncompressed)
 				res.b = dbuf
-				res.pooled = obuf
 			} else if searchLen > 0 {
-				// Assemble [search chunk][data chunk] in inbuf. inbuf has capacity
-				// obufLen but was sliced to len(uncompressed)+obufHeaderLen, which is
-				// shorter than the smc-based offsets below for a small block — extend
-				// it to cap so the slices and the data copy aren't out of range.
-				inbuf = inbuf[:cap(inbuf)]
+				// Prepend the search chunk in place: the data sits at obuf[smc:]
+				// with smc bytes free in front, so only the small chunk moves.
 				start := smc - searchLen
-				copy(inbuf[start:], inbuf[:searchLen])
-				copy(inbuf[smc:], dbuf)
-				res.b = inbuf[start : smc+len(dbuf)]
-				res.pooled = inbuf
-				obuf, inbuf = inbuf, obuf
+				copy(obuf[start:], obuf[:searchLen])
+				res.b = obuf[start : smc+len(dbuf)]
 			} else {
 				res.b = dbuf
-				res.pooled = obuf
 			}
+			res.pooled = obuf
 			output <- res
 
 			w.buffers.Put(inbuf)
@@ -753,7 +754,7 @@ func (w *Writer) writeFull(inbuf []byte) (errRet error) {
 	}
 
 	if w.concurrency == 1 {
-		_, err := w.writeSync(inbuf[obufHeaderLen:], true, false)
+		_, err := w.writeSync(inbuf[w.searchMaxChunk+obufHeaderLen:], true, false)
 		return err
 	}
 
@@ -776,7 +777,7 @@ func (w *Writer) writeFull(inbuf []byte) (errRet error) {
 	// Get an output buffer.
 	smc := w.searchMaxChunk
 	obuf := w.buffers.Get().([]byte)[:w.obufLen]
-	uncompressed := inbuf[obufHeaderLen:]
+	uncompressed := inbuf[smc+obufHeaderLen:]
 
 	output := make(chan result)
 	w.output <- output
@@ -800,8 +801,10 @@ func (w *Writer) writeFull(inbuf []byte) (errRet error) {
 			chunkLen = 4 + n + n2
 			dbuf = dbuf[:obufHeaderLen+n+n2]
 		} else {
+			// Incompressible: the raw data's buffer (inbuf, with smc headroom
+			// in front) becomes the output; the scratch obuf is freed.
 			obuf, inbuf = inbuf, obuf
-			dbuf = obuf
+			dbuf = obuf[smc:]
 		}
 
 		dbuf[0] = chunkType
@@ -813,17 +816,19 @@ func (w *Writer) writeFull(inbuf []byte) (errRet error) {
 		dbuf[6] = uint8(checksum >> 16)
 		dbuf[7] = uint8(checksum >> 24)
 
-		// Only index compressible blocks.
+		// Index compressible blocks; also incompressible blocks when a prefix is
+		// set (prefix tables stay sparse; a no-prefix table on incompressible
+		// data would exceed maxPopPct and be dropped). The data sits at
+		// obuf[smc:] with smc bytes free in front, so the search chunk prepends
+		// in place — no block copy.
 		searchLen := 0
-		if searchCfg != nil && chunkType != chunkTypeUncompressedData {
+		if searchCfg != nil && (n2 > 0 || searchCfg.hasPrefix()) {
 			var stBuf []byte
 			if v := searchTablePool.Get(); v != nil {
 				stBuf = v.([]byte)
 			}
 			table, reductions := searchCfg.buildSearchTable(uncompressed, nil, stBuf, searchCfg.shouldPack(w.concurrency))
 			if table != nil {
-				// Search chunk is in the original obuf (may have been swapped if incompressible,
-				// but we only reach here for compressible blocks so obuf is unchanged).
 				searchLen = len(w.appendSearchTableEitherChunk(obuf[:0], reductions, table))
 			}
 			searchTablePool.Put(table)
@@ -837,6 +842,8 @@ func (w *Writer) writeFull(inbuf []byte) (errRet error) {
 			res.uncompSize = len(uncompressed)
 			res.b = dbuf
 		} else if searchLen > 0 {
+			// Prepend the search chunk in place: the data sits at obuf[smc:]
+			// with smc bytes free in front, so only the small chunk moves.
 			start := smc - searchLen
 			copy(obuf[start:], obuf[:searchLen])
 			res.b = obuf[start : smc+len(dbuf)]
@@ -919,7 +926,7 @@ func (w *Writer) writeSync(p []byte, final, omitTrailing bool) (nRet int, errRet
 			}
 			// Omit the table for a flushed block without full overlap (its 0x47
 			// ref is still written); the searcher always scans tableless blocks.
-			if w.searchCfg != nil && n2 > 0 && !(omitTrailing && len(p) < w.searchCfg.overlapBytes()) {
+			if w.searchCfg != nil && (n2 > 0 || w.searchCfg.hasPrefix()) && !(omitTrailing && len(p) < w.searchCfg.overlapBytes()) {
 				overlap := p[:min(len(p), w.searchCfg.overlapBytes())]
 				if err := w.writeSearchTableSync(uncompressed, overlap); err != nil {
 					return 0, err
@@ -928,7 +935,7 @@ func (w *Writer) writeSync(p []byte, final, omitTrailing bool) (nRet int, errRet
 			if err := w.writeSidecarRemoteRef(mainBlockOffset, len(uncompressed)); err != nil {
 				return 0, err
 			}
-		} else if w.searchCfg != nil && n2 > 0 && !(omitTrailing && len(p) < w.searchCfg.overlapBytes()) {
+		} else if w.searchCfg != nil && (n2 > 0 || w.searchCfg.hasPrefix()) && !(omitTrailing && len(p) < w.searchCfg.overlapBytes()) {
 			overlap := p[:min(len(p), w.searchCfg.overlapBytes())]
 			if err := w.writeSearchTableSync(uncompressed, overlap); err != nil {
 				return 0, err
