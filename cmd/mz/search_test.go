@@ -111,16 +111,25 @@ func captureCount(t *testing.T, path, pattern string) int {
 func TestSearchCountLongLineManyBlocks(t *testing.T) {
 	const block = 4096
 	needle := []byte("NEEDLE")
-	for _, gapped := range []bool{false, true} {
-		name := "contiguous"
-		if gapped {
-			name = "gapped"
-		}
-		t.Run(name, func(t *testing.T) {
+	// hasNeedle selects which blocks carry the needle. Each case is a single
+	// newline-free logical line spanning all blocks, so the count must be 1
+	// however many match-free blocks fall between matches. "widegap" leaves two
+	// adjacent match-free blocks between matches, so the continuation state must
+	// bridge more than one skipped block, not just alternating ones.
+	cases := []struct {
+		name      string
+		hasNeedle func(i int) bool
+	}{
+		{"contiguous", func(i int) bool { return true }},
+		{"gapped", func(i int) bool { return i%2 == 0 }},
+		{"widegap", func(i int) bool { return i%3 == 0 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			var data []byte
 			for i := range 10 {
 				chunk := bytes.Repeat([]byte("x"), block) // no newlines: one logical line
-				if !gapped || i%2 == 0 {
+				if tc.hasNeedle(i) {
 					copy(chunk[100:], needle)
 				}
 				data = append(data, chunk...)

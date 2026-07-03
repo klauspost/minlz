@@ -193,11 +193,6 @@ func searchFile(file string, pattern []byte, opts searchOpts) (found bool, stats
 	matchCount := 0
 	lineOffset := int64(1)
 	lastLineStart := int64(-1)
-	// contigEnd is the stream offset just past the last block a match was
-	// resolved in — used to detect that a still-open line (one with no newline
-	// in the current or previous block) continues contiguously from an earlier
-	// block, so it keeps a single dedup key across all the blocks it spans.
-	contigEnd := int64(-1)
 
 	err = searcher.Search(pattern, func(r minlz.SearchResult) error {
 		found = true
@@ -213,16 +208,17 @@ func searchFile(file string, pattern []byte, opts searchOpts) (found bool, stats
 		if opts.lines {
 			// Count each matching line once, keyed by the line's start offset.
 			// A match with no preceding newline in the current or previous block
-			// belongs to a line that began earlier; if that block is contiguous
-			// with the run we've scanned, reuse the open line's key so a line
-			// spanning more than two blocks (e.g. newline-sparse data) is counted
-			// once, not once per block. Two-block straddles resolve via the
-			// previous block, matching grep/rg.
+			// belongs to a line that began earlier, so reuse the open line's key:
+			// a newline-sparse line (e.g. minified JSON) is counted once, not once
+			// per block, even when match-free blocks between matches are skipped
+			// without being decoded. This assumes skipped blocks hold no newline;
+			// a newline hidden in a skipped block that splits two long matching
+			// lines would undercount, which the block search deliberately can't
+			// see without decoding what it skipped.
 			ls, found := lineStartOffset(r)
-			if !found && lastLineStart >= 0 && r.BlockStart <= contigEnd {
+			if !found && lastLineStart >= 0 {
 				ls = lastLineStart
 			}
-			contigEnd = r.BlockStart + int64(r.PrevBlockLen) + int64(len(r.Blocks[1]))
 			if ls == lastLineStart {
 				return nil
 			}
