@@ -103,6 +103,15 @@ func NewSearchTableConfig() SearchTableConfig {
 	}
 }
 
+// hasPrefix reports whether a prefix filter (byte, mask, or long) is
+// configured. Prefix tables index only the positions following the prefix, so
+// they stay sparse — and useful — even on incompressible data. A no-prefix
+// table on incompressible data would exceed maxPopPct and be dropped, so those
+// blocks are left unindexed (the compressibility gate skips the wasted work).
+func (c *SearchTableConfig) hasPrefix() bool {
+	return c.tableType != searchTableTypeNoPrefix
+}
+
 // WithMatchLen sets the match length (1-8).
 // Shorter values use less of the search pattern but are more likely to collide.
 // Default is 6.
