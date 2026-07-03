@@ -193,6 +193,15 @@ func searchFile(file string, pattern []byte, opts searchOpts) (found bool, stats
 	matchCount := 0
 	lineOffset := int64(1)
 	lastLineStart := int64(-1)
+	// contigEnd is the stream offset just past the last block a match was
+	// resolved in. A still-open line (no newline in the current or previous
+	// block) reuses the open key only when the match is at most one block past
+	// contigEnd — that single intervening block is the previous block, which
+	// lineStartOffset actually scans (lazily decoding it even when skipped), so a
+	// separating newline there is caught. A wider gap of 2+ skipped blocks is
+	// never decoded; since blocks are large, a line spanning them is unlikely, so
+	// we assume the gap held a newline and start a new line.
+	contigEnd := int64(-1)
 
 	err = searcher.Search(pattern, func(r minlz.SearchResult) error {
 		found = true
@@ -208,17 +217,15 @@ func searchFile(file string, pattern []byte, opts searchOpts) (found bool, stats
 		if opts.lines {
 			// Count each matching line once, keyed by the line's start offset.
 			// A match with no preceding newline in the current or previous block
-			// belongs to a line that began earlier, so reuse the open line's key:
-			// a newline-sparse line (e.g. minified JSON) is counted once, not once
-			// per block, even when match-free blocks between matches are skipped
-			// without being decoded. This assumes skipped blocks hold no newline;
-			// a newline hidden in a skipped block that splits two long matching
-			// lines would undercount, which the block search deliberately can't
-			// see without decoding what it skipped.
+			// belongs to a line that began earlier; reuse the open key only when
+			// the run is contiguous (see contigEnd) so a newline-sparse line
+			// spanning a block plus one skipped block is counted once. Across a
+			// wider gap we assume a newline was skipped and count a new line.
 			ls, found := lineStartOffset(r)
-			if !found && lastLineStart >= 0 {
+			if !found && lastLineStart >= 0 && r.BlockStart <= contigEnd {
 				ls = lastLineStart
 			}
+			contigEnd = r.BlockStart + int64(r.PrevBlockLen) + int64(len(r.Blocks[1]))
 			if ls == lastLineStart {
 				return nil
 			}

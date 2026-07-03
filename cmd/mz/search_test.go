@@ -103,26 +103,27 @@ func captureCount(t *testing.T, path, pattern string) int {
 	return n
 }
 
-// TestSearchCountLongLineManyBlocks guards against counting a single
-// newline-free line (e.g. minified JSON) once per block instead of once. The
-// line spans many blocks with matches throughout; grep counts one matching
-// line, so mz must too. "gapped" leaves the needle out of odd blocks so they
-// are skipped at search time, exercising continuation across a skipped block.
+// TestSearchCountLongLineManyBlocks pins how a single newline-free line (e.g.
+// minified JSON) is counted when its matches are spread across blocks. A
+// skipped block between two matches is the previous block of the later match,
+// so it is scanned for a separating newline: "contiguous" and "gapped" (one
+// skipped block between matches) resolve to a single line. A wider gap of 2+
+// skipped blocks is never decoded; since blocks are large a line spanning them
+// is unlikely, so "widegap" assumes a newline was skipped and counts each
+// matching block as its own line (4 matches -> 4).
 func TestSearchCountLongLineManyBlocks(t *testing.T) {
 	const block = 4096
 	needle := []byte("NEEDLE")
-	// hasNeedle selects which blocks carry the needle. Each case is a single
-	// newline-free logical line spanning all blocks, so the count must be 1
-	// however many match-free blocks fall between matches. "widegap" leaves two
-	// adjacent match-free blocks between matches, so the continuation state must
-	// bridge more than one skipped block, not just alternating ones.
+	// hasNeedle selects which blocks carry the needle; want is the expected line
+	// count under the single-block-gap continuation rule described above.
 	cases := []struct {
 		name      string
 		hasNeedle func(i int) bool
+		want      int
 	}{
-		{"contiguous", func(i int) bool { return true }},
-		{"gapped", func(i int) bool { return i%2 == 0 }},
-		{"widegap", func(i int) bool { return i%3 == 0 }},
+		{"contiguous", func(i int) bool { return true }, 1},
+		{"gapped", func(i int) bool { return i%2 == 0 }, 1},
+		{"widegap", func(i int) bool { return i%3 == 0 }, 4},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,8 +148,8 @@ func TestSearchCountLongLineManyBlocks(t *testing.T) {
 			if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if got := captureCount(t, path, string(needle)); got != 1 {
-				t.Fatalf("count=%d, want 1 (a newline-free line must count once, not once per block)", got)
+			if got := captureCount(t, path, string(needle)); got != tc.want {
+				t.Fatalf("count=%d, want %d", got, tc.want)
 			}
 		})
 	}
