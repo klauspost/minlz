@@ -660,6 +660,345 @@ emitRemainder:
 	return d
 }
 
+// encodeBlockBest parses src like the function encodeBlockBest, without its size and offset limits,
+// scoring matches by their estimated size in a SIMD block.
+func (e *simdEncoder) encodeBlockBest(src []byte) {
+	const (
+		// Long hash matches.
+		lTableBits    = 20
+		maxLTableSize = 1 << lTableBits
+
+		// Short hash matches.
+		sTableBits    = 18
+		maxSTableSize = 1 << sTableBits
+
+		inputMargin = 8 + 2
+
+		// Estimated sizes in bits.
+		litBits    = 6
+		tokenBits  = 4
+		escapeBits = 6
+		symbolBits = 7
+	)
+
+	sLimit := len(src) - inputMargin
+	var lTable *[maxLTableSize]uint64
+	if t := encBestLPool.Get(); t != nil {
+		lTable = t.(*[maxLTableSize]uint64)
+		*lTable = [maxLTableSize]uint64{}
+	} else {
+		lTable = new([maxLTableSize]uint64)
+	}
+	defer encBestLPool.Put(lTable)
+
+	var sTable *[maxSTableSize]uint64
+	if t := encBestSPool.Get(); t != nil {
+		sTable = t.(*[maxSTableSize]uint64)
+		*sTable = [maxSTableSize]uint64{}
+	} else {
+		sTable = new([maxSTableSize]uint64)
+	}
+	defer encBestSPool.Put(sTable)
+
+	nextEmit := 0
+	s := 1
+	repeat := 1
+	cv := load64(src, s)
+
+	const lowbitMask = 0xffffffff
+	getCur := func(x uint64) int {
+		return int(x & lowbitMask)
+	}
+	getPrev := func(x uint64) int {
+		return int(x >> 32)
+	}
+	const maxSkip = 64
+
+	for {
+		type match struct {
+			offset  int
+			s       int
+			length  int
+			score   int
+			rep     bool
+			nextrep bool
+		}
+		var best match
+		for {
+			nextS := (s-nextEmit)>>8 + 1
+			if nextS > maxSkip {
+				nextS = s + maxSkip
+			} else {
+				nextS += s
+			}
+			if nextS > sLimit {
+				goto emitRemainder
+			}
+			hashL := hash8(cv, lTableBits)
+			hashS := hash4(cv, sTableBits)
+			candidateL := lTable[hashL]
+			candidateS := sTable[hashS]
+
+			score := func(m match) int {
+				// Bigger score is better.
+				// -litBits*m.s is the base cost of the literals before the match.
+				score := litBits*(m.length-m.s) - tokenBits
+				if m.s-nextEmit > simdMaxLen {
+					score -= escapeBits
+				}
+				offset := m.s - m.offset
+				if !m.rep {
+					score -= symbolBits + max(bits.Len(uint(offset))-4, 0)
+				}
+				if offset < simdMaxLen {
+					return score - tokenBits*((m.length-1)/simdMaxLen)
+				}
+				if m.length > simdMaxLen {
+					score -= escapeBits
+				}
+				return score
+			}
+
+			matchAt := func(offset, s int, first uint32) match {
+				if (best.length != 0 && best.s-best.offset == s-offset) || s <= offset {
+					// Don't retest if we have the same offset.
+					return match{offset: offset, s: s}
+				}
+				if load32(src, offset) != first {
+					return match{offset: offset, s: s}
+				}
+
+				m := match{offset: offset, s: s, length: 4 + offset, rep: false}
+				s += 4
+
+				for s < len(src) {
+					if len(src)-s < 8 {
+						if src[s] == src[m.length] {
+							m.length++
+							s++
+							continue
+						}
+						break
+					}
+					if diff := load64(src, s) ^ load64(src, m.length); diff != 0 {
+						m.length += bits.TrailingZeros64(diff) >> 3
+						break
+					}
+					s += 8
+					m.length += 8
+				}
+				for m.s > nextEmit && m.offset > 0 {
+					if src[m.offset-1] != src[m.s-1] {
+						break
+					}
+					m.s--
+					m.offset--
+					m.length++
+				}
+				m.length -= offset
+
+				m.score = score(m)
+				if m.score <= -litBits*m.s {
+					// Eliminate if no savings, we might find a better one.
+					m.length = 0
+				}
+				if m.s+m.length < sLimit {
+					const checkoff = 1
+					a, b := m.s+m.length+checkoff, m.offset+m.length+checkoff
+					m.nextrep = load32(src, a) == load32(src, b)
+				}
+				return m
+			}
+			matchAtRepeat := func(offset, s int, first uint32) match {
+				if best.rep {
+					// Don't retest if we already have a repeat
+					return match{offset: offset, s: s}
+				}
+				// 2 gives close to no improvement,
+				// since it may just give 'literal -> len 2 repeat -> literal' section.
+				// which eats up the gains in overhead.
+				// 3 gives pretty consistent improvement
+				const checkbytes = 3
+				mask := uint32((1 << (8 * checkbytes)) - 1)
+				if load32(src, offset)&mask != first&mask {
+					return match{offset: offset, s: s}
+				}
+				m := match{offset: offset, s: s, length: checkbytes + offset, rep: true}
+				s += checkbytes
+				for s < len(src) {
+					if len(src)-s < 8 {
+						if src[s] == src[m.length] {
+							m.length++
+							s++
+							continue
+						}
+						break
+					}
+					if diff := load64(src, s) ^ load64(src, m.length); diff != 0 {
+						m.length += bits.TrailingZeros64(diff) >> 3
+						break
+					}
+					s += 8
+					m.length += 8
+				}
+				for m.s > nextEmit && m.offset > 0 {
+					if src[m.offset-1] != src[m.s-1] {
+						break
+					}
+					m.s--
+					m.offset--
+					m.length++
+				}
+				m.length -= offset
+				if m.s+m.length < sLimit {
+					const checkoff = 1
+					a, b := m.s+m.length+checkoff, m.offset+m.length+checkoff
+					m.nextrep = load32(src, a) == load32(src, b)
+				}
+				m.score = score(m)
+				return m
+			}
+
+			bestOf := func(a, b match) match {
+				if b.length == 0 {
+					return a
+				}
+				if a.length == 0 {
+					return b
+				}
+				if a.score > b.score {
+					return a
+				}
+				if b.score > a.score {
+					return b
+				}
+
+				// Pick whichever starts the earliest,
+				// we can probably find a match right away
+				if a.s != b.s {
+					if a.s < b.s {
+						return a
+					}
+					return b
+				}
+				// If one is a good repeat candidate, pick it.
+				if a.nextrep != b.nextrep {
+					if a.nextrep {
+						return a
+					}
+					return b
+				}
+				// Pick the smallest distance offset.
+				if a.offset > b.offset {
+					return a
+				}
+				return b
+			}
+
+			best = bestOf(matchAt(getCur(candidateL), s, uint32(cv)), matchAt(getPrev(candidateL), s, uint32(cv)))
+			best = bestOf(best, matchAt(getCur(candidateS), s, uint32(cv)))
+			best = bestOf(best, matchAt(getPrev(candidateS), s, uint32(cv)))
+			best = bestOf(best, matchAtRepeat(s-repeat, s, uint32(cv)))
+			best = bestOf(best, matchAtRepeat(s-repeat+1, s+1, uint32(cv>>8)))
+
+			if best.length > 0 {
+				hashS := hash4(cv>>8, sTableBits)
+				nextShort := sTable[hashS]
+				sFwd := s + 1
+				cv := load64(src, sFwd)
+				hashL := hash8(cv, lTableBits)
+				nextLong := lTable[hashL]
+				best = bestOf(best, matchAt(getCur(nextShort), sFwd, uint32(cv)))
+				best = bestOf(best, matchAt(getPrev(nextShort), sFwd, uint32(cv)))
+				best = bestOf(best, matchAt(getCur(nextLong), sFwd, uint32(cv)))
+				best = bestOf(best, matchAt(getPrev(nextLong), sFwd, uint32(cv)))
+
+				sFwd++
+				cv = load64(src, sFwd)
+				hashL = hash8(cv, lTableBits)
+				nextLong = lTable[hashL]
+
+				best = bestOf(best, matchAtRepeat(sFwd-repeat, sFwd, uint32(cv)))
+				hashS = hash4(cv, sTableBits)
+				nextShort = sTable[hashS]
+				best = bestOf(best, matchAt(getCur(nextShort), sFwd, uint32(cv)))
+				best = bestOf(best, matchAt(getPrev(nextShort), sFwd, uint32(cv)))
+				best = bestOf(best, matchAt(getCur(nextLong), sFwd, uint32(cv)))
+				best = bestOf(best, matchAt(getPrev(nextLong), sFwd, uint32(cv)))
+
+				// Search for a match at best match end, see if that is better.
+				// Allow some bytes at the beginning to mismatch.
+				// Sweet spot is around 1-2 bytes, but depends on input.
+				// The skipped bytes are tested in Extend backwards,
+				// and still picked up as part of the match if they do.
+				const skipBeginning = 2
+				const skipEnd = 1
+				if sAt := best.s + best.length - skipEnd; sAt < sLimit {
+					sBack := best.s + skipBeginning - skipEnd
+					backL := best.length - skipBeginning
+					cv = load64(src, sBack)
+
+					next := lTable[hash8(load64(src, sAt), lTableBits)]
+
+					if checkAt := getCur(next) - backL; checkAt > 0 {
+						best = bestOf(best, matchAt(checkAt, sBack, uint32(cv)))
+					}
+					if checkAt := getPrev(next) - backL; checkAt > 0 {
+						best = bestOf(best, matchAt(checkAt, sBack, uint32(cv)))
+					}
+					// Quite small gain, but generally a benefit on very compressible material.
+					next = sTable[hash4(load64(src, sAt), sTableBits)]
+					if checkAt := getCur(next) - backL; checkAt > 0 {
+						best = bestOf(best, matchAt(checkAt, sBack, uint32(cv)))
+					}
+					if checkAt := getPrev(next) - backL; checkAt > 0 {
+						best = bestOf(best, matchAt(checkAt, sBack, uint32(cv)))
+					}
+				}
+			}
+
+			lTable[hashL] = uint64(s) | candidateL<<32
+			sTable[hashS] = uint64(s) | candidateS<<32
+
+			if best.length > 0 {
+				break
+			}
+
+			cv = load64(src, nextS)
+			s = nextS
+		}
+		startIdx := s + 1
+		s = best.s
+		base := s
+		offset := s - best.offset
+		s += best.length
+		if best.rep {
+			e.emitRepeatLits(src[nextEmit:base], best.length)
+		} else {
+			e.emitCopyLits(src[nextEmit:base], offset, best.length)
+		}
+		repeat = offset
+
+		nextEmit = s
+		if s >= sLimit {
+			goto emitRemainder
+		}
+		for i := startIdx; i < s; i++ {
+			cv0 := load64(src, i)
+			long0 := hash8(cv0, lTableBits)
+			short0 := hash4(cv0, sTableBits)
+			lTable[long0] = uint64(i) | lTable[long0]<<32
+			sTable[short0] = uint64(i) | sTable[short0]<<32
+		}
+		cv = load64(src, s)
+	}
+
+emitRemainder:
+	if nextEmit < len(src) {
+		e.emitLiterals(src[nextEmit:])
+	}
+}
+
 // emitCopySize returns the size to encode the offset+length
 //
 // It assumes that:

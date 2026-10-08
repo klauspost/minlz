@@ -22,20 +22,24 @@ import (
 	"flag"
 	"fmt"
 	"math/rand"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/klauspost/compress/s2"
+	"github.com/klauspost/pivco"
 	"github.com/minio/minlz/internal/race"
+	"github.com/minio/minlz/internal/reference"
 )
 
 func TestEncodeHuge(t *testing.T) {
 	data := make([]byte, MaxBlockSize)
-	for level := LevelFastest; level <= LevelSmallest; level++ {
+	for level := LevelFastest; level <= LevelSmallestSIMD; level++ {
 		t.Run(fmt.Sprintf("level%d", level), func(t *testing.T) {
 			comp, err := Encode(make([]byte, MaxEncodedLen(len(data))), data, level)
 			if err != nil {
@@ -569,7 +573,7 @@ func TestEncodeRandomStored(t *testing.T) {
 		src := make([]byte, size)
 		rng.Read(src)
 		want := encodeUncompressed(nil, src)
-		for _, level := range []int{LevelSuperFast, LevelFastest, LevelBalanced, LevelSmallest} {
+		for _, level := range append([]int{LevelSuperFast, LevelFastest, LevelBalanced, LevelSmallest}, simdLevels...) {
 			t.Run(fmt.Sprintf("%d/level%d", size, level), func(t *testing.T) {
 				got, err := Encode(nil, src, level)
 				if err != nil {
@@ -1048,6 +1052,314 @@ func TestMaxOffsetBoundary(t *testing.T) {
 					t.Errorf("level=%d delta=%d seed=%d: roundtrip mismatch (err=%v)", level, delta, seed, err)
 				}
 			}
+		}
+	}
+}
+
+var simdLevels = []int{LevelSuperFastSIMD, LevelFastestSIMD, LevelBalancedSIMD, LevelSmallestSIMD,
+	LevelSuperFastSIMD | LevelSIMDDelta, LevelFastestSIMD | LevelSIMDDelta, LevelBalancedSIMD | LevelSIMDDelta}
+
+// simdTestStats adds the entry modes of the streams of SIMD block b to modes, with the literals as simdLits,
+// and how many chunks have each chunk flag to flags.
+func simdTestStats(t testing.TB, b []byte, modes *[simdLits + 1][8]int, flags *[2]int) {
+	t.Helper()
+	_, body, err := simdHeader(b[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = body[1:]
+	entry := func(tab []byte, k int) []byte {
+		e, n := binary.Uvarint(tab)
+		mode := int(e & 7)
+		modes[k][mode]++
+		switch {
+		case mode == simdCodeLens:
+			n += simdCodeBytes[k]
+		case mode == simdDeltaLens:
+			n += (simdLayouts[simdDelta].n + 1) / 2
+		case mode == simdClassLens && k == simdTok:
+			n += 11
+		case mode == simdClassLens:
+			n += (simdLayouts[k].n + 1) / 2
+		}
+		return tab[n:]
+	}
+	table := func(sec []byte) []byte {
+		size, n := rvarint(sec)
+		return sec[len(sec)-n-int(size) : len(sec)-n]
+	}
+	lz, n := rvarint(body)
+	for tab := table(body[lz : len(body)-n]); len(tab) > 0; {
+		tab = entry(tab, simdLits)
+	}
+	if lz == 0 {
+		return
+	}
+	for tab := table(body[:lz]); len(tab) > 0; {
+		for i := range flags {
+			flags[i] += int(tab[0]>>i) & 1
+		}
+		tab = tab[1:]
+		for k := range simdLits {
+			tab = entry(tab, k)
+		}
+		_, n := binary.Uvarint(tab)
+		tab = tab[n:]
+	}
+}
+
+func TestSIMDEncode(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	n := 3 << 20
+	if testing.Short() {
+		n = 256 << 10
+	}
+	period := func(p int) []byte {
+		return bytes.Repeat(genEncRandom(rng, p), n/p+1)[:n]
+	}
+	// records changes a few bytes of each record a little, which delta literals code well.
+	records := func(n int) []byte {
+		rec := genEncRandom(rng, 64)
+		var b []byte
+		for len(b) < n {
+			for range 4 {
+				rec[rng.Intn(len(rec))] += byte(rng.Intn(5) - 2)
+			}
+			b = append(b, rec...)
+		}
+		return b
+	}
+	text := readFile(t, "testdata/Mark.Twain-Tom.Sawyer.txt")
+	inputs := map[string][]byte{
+		"zeros-1k":    make([]byte, 1024),
+		"zeros":       make([]byte, n),
+		"text-2k":     text[:2048],
+		"tom-sawyer":  bytes.Repeat(text, n/len(text)+1)[:n],
+		"words":       genEncText(rng, n),
+		"mixed":       genEncMixed(rng, n),
+		"period-3":    period(3),
+		"period-100":  period(100),
+		"records":     records(n),
+		"records-16k": records(16 << 10),
+	}
+	files, _ := filepath.Glob("testdata/bench/*")
+	for _, f := range files {
+		if !strings.HasSuffix(f, ".jpeg") {
+			inputs[filepath.Base(f)] = readFile(t, f)
+		}
+	}
+	var modes [simdLits + 1][8]int
+	var flags [2]int
+	for name, src := range inputs {
+		for _, level := range simdLevels {
+			enc, err := Encode(nil, src, level)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dec, err := Decode(nil, enc)
+			if err != nil || !bytes.Equal(dec, src) {
+				t.Fatalf("%s level %d: roundtrip mismatch (err=%v)", name, level, err)
+			}
+			if v, _ := binary.Uvarint(enc[1:]); enc[0] != 0 || v>>24 != simdBlockType {
+				// Delta literals can make small inputs incompressible.
+				if level&LevelSIMDDelta == 0 {
+					t.Errorf("%s level %d: not a SIMD block", name, level)
+				}
+				continue
+			}
+			if !bytes.Equal(TryEncode(nil, src, level), enc) {
+				t.Errorf("%s level %d: TryEncode mismatch", name, level)
+			}
+			if app, _ := AppendEncoded([]byte{1}, src, level); !bytes.Equal(app, append([]byte{1}, enc...)) {
+				t.Errorf("%s level %d: AppendEncoded mismatch", name, level)
+			}
+			simdTestStats(t, enc, &modes, &flags)
+		}
+	}
+	for m := range simdDeltaLens + 1 {
+		if modes[simdTok][m]+modes[simdLL][m]+modes[simdOffc][m]+modes[simdEsc][m]+modes[simdLits][m] == 0 {
+			t.Errorf("mode %d not used", m)
+		}
+	}
+	if flags[0] == 0 || flags[1] == 0 {
+		t.Errorf("chunk flags not used: %v", flags)
+	}
+	t.Logf("modes %v, chunk flags %v", modes, flags)
+}
+
+// TestSIMDEncodeOps decodes encoded blocks with the strict reference decoder, which also checks the no-overlap flags.
+func TestSIMDEncodeOps(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	inputs := [][]byte{
+		make([]byte, 100000),
+		readFile(t, "testdata/Mark.Twain-Tom.Sawyer.txt"),
+		genEncText(rng, 300000),
+		genEncMixed(rng, 300000),
+		bytes.Repeat(genEncRandom(rng, 5), 50000),
+	}
+	for i, src := range inputs {
+		for _, level := range simdLevels {
+			enc, err := Encode(nil, src, level)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := reference.DecodeSIMDBlockStrict(enc)
+			if err != nil || !bytes.Equal(got, src) {
+				t.Fatalf("input %d level %d: %v", i, level, err)
+			}
+		}
+	}
+}
+
+func TestSIMDEncodeChunkEdge(t *testing.T) {
+	type op struct{ lits, off, ml int }
+	for _, delta := range []int{0, -1, 256} {
+		for before := simdChunkOps - 3; before <= simdChunkOps; before++ {
+			rng := rand.New(rand.NewSource(int64(before)))
+			ops := make([]op, before, before+4)
+			for i := range ops {
+				ops[i] = op{1, 1 + rng.Intn(8), 4}
+			}
+			ops = append(ops, op{300, 100, 40}, op{600, 40, 600}, op{0, 3, 70}, op{2, 3, 33})
+			var src []byte
+			for _, o := range ops {
+				for range o.lits {
+					src = append(src, byte(rng.Intn(256)))
+				}
+				for range o.ml {
+					src = append(src, src[len(src)-min(o.off, len(src))])
+				}
+			}
+			pv, err := pivco.NewEncoder(pivco.WithBlockSize(pivco.MaxBlockSize), pivco.WithFlatLayout(pivco.FlatVertical))
+			if err != nil {
+				t.Fatal(err)
+			}
+			block := make([]byte, MaxEncodedLen(len(src)))
+			e := simdEncoder{pv: pv, out: block[1:1:len(block)]}
+			e.reset(src, delta, 0)
+			p := 0
+			for _, o := range ops {
+				lits := src[p : p+o.lits]
+				p += o.lits + o.ml
+				switch {
+				case o.lits == 0:
+					e.emitCopy(o.off, o.ml)
+				case o.off == e.rep:
+					e.emitRepeatLits(lits, o.ml)
+				default:
+					e.emitCopyLits(lits, o.off, o.ml)
+				}
+			}
+			if e.nTok > 0 {
+				e.endChunk()
+			}
+			n := e.finish()
+			if n == 0 {
+				t.Fatal("block not encoded")
+			}
+			got, err := Decode(nil, block[:n+1])
+			if err != nil || !bytes.Equal(got, src) {
+				t.Fatalf("delta %d, %d operations before: roundtrip mismatch (err=%v)", delta, before, err)
+			}
+		}
+	}
+}
+
+func TestSIMDEncodeDelta(t *testing.T) {
+	src := genEncText(rand.New(rand.NewSource(1)), 100000)
+	for _, level := range []int{LevelSmallestSIMD | LevelSIMDDelta, LevelBalanced | LevelSIMDDelta, LevelSIMDDelta} {
+		if _, err := Encode(nil, src, level); err != ErrInvalidLevel {
+			t.Errorf("level %d: got %v, want ErrInvalidLevel", level, err)
+		}
+		if TryEncode(nil, src, level) != nil {
+			t.Errorf("level %d: TryEncode encoded", level)
+		}
+	}
+	for _, level := range []int{LevelFastestSIMD, LevelBalancedSIMD, LevelFastestSIMD | LevelSIMDDelta, LevelBalancedSIMD | LevelSIMDDelta} {
+		enc, err := Encode(nil, src, level)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var modes [simdLits + 1][8]int
+		var flags [2]int
+		simdTestStats(t, enc, &modes, &flags)
+		chunks := 0
+		for _, n := range modes[simdTok] {
+			chunks += n
+		}
+		if want := chunks * (level / LevelSIMDDelta); chunks == 0 || flags[0] != want {
+			t.Errorf("level %d: %d of %d chunks with delta literals, want %d", level, flags[0], chunks, want)
+		}
+	}
+
+	// Chunks of literals that are their references plus 0 or 1, then random literals, then again,
+	// should take delta, plain and delta literals, in separate literal blocks.
+	rng := rand.New(rand.NewSource(1))
+	var src2 []byte
+	for _, delta := range []bool{true, false, true} {
+		for range simdChunkOps {
+			p := len(src2)
+			for j := range 6 {
+				v := byte(rng.Intn(256))
+				if delta && p >= 8 {
+					v = src2[p-8+j] + byte(rng.Intn(2))
+				}
+				src2 = append(src2, v)
+			}
+			r := min(8, len(src2))
+			for range 4 {
+				src2 = append(src2, src2[len(src2)-r])
+			}
+		}
+	}
+	pv, err := pivco.NewEncoder(pivco.WithBlockSize(pivco.MaxBlockSize), pivco.WithFlatLayout(pivco.FlatVertical))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := make([]byte, MaxEncodedLen(len(src2)))
+	e := simdEncoder{pv: pv, out: block[1:1:len(block)]}
+	e.reset(src2, 256, 0)
+	for p := 0; p < len(src2); p += 10 {
+		if e.rep == 8 {
+			e.emitRepeatLits(src2[p:p+6], 4)
+		} else {
+			e.emitCopyLits(src2[p:p+6], 8, 4)
+		}
+	}
+	n := e.finish()
+	if n == 0 {
+		t.Fatal("block not encoded")
+	}
+	enc := block[:n+1]
+	if got, err := reference.DecodeSIMDBlockStrict(enc); err != nil || !bytes.Equal(got, src2) {
+		t.Fatalf("roundtrip mismatch: %v", err)
+	}
+	var modes [simdLits + 1][8]int
+	var flags [2]int
+	simdTestStats(t, enc, &modes, &flags)
+	litBlocks := 0
+	for _, n := range modes[simdLits] {
+		litBlocks += n
+	}
+	// Each run of 3*simdChunkOps*2 literals needs 2 literal blocks.
+	if want := []int{0, 2}; e.switches[0] != want[0] || flags[0] != want[1] || litBlocks != 6 {
+		t.Errorf("switches %v, %d delta chunks, %d literal blocks; want delta, plain, delta in 6 literal blocks", e.switches, flags[0], litBlocks)
+	}
+}
+
+func TestSIMDEncodeAllocs(t *testing.T) {
+	if race.Enabled {
+		t.Skip("sync.Pool drops items with -race")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	src := genEncText(rand.New(rand.NewSource(1)), 1<<20)
+	dst := make([]byte, MaxEncodedLen(len(src)))
+	for _, level := range simdLevels {
+		if _, err := Encode(dst, src, level); err != nil {
+			t.Fatal(err)
+		}
+		if n := testing.AllocsPerRun(5, func() { Encode(dst, src, level) }); n != 0 {
+			t.Errorf("level %d: %v allocations", level, n)
 		}
 	}
 }

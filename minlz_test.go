@@ -108,6 +108,10 @@ func encodeGo(dst, src []byte, level int) []byte {
 		}
 	case LevelSmallest:
 		n = encodeBlockBest(dst[d:], src, nil)
+	case LevelSuperFastSIMD, LevelFastestSIMD, LevelBalancedSIMD, LevelSmallestSIMD,
+		LevelSuperFastSIMD | LevelSIMDDelta, LevelFastestSIMD | LevelSIMDDelta, LevelBalancedSIMD | LevelSIMDDelta:
+		d = 1
+		n = encodeBlockSIMD(dst[d:], src, level)
 	default:
 		panic(ErrInvalidLevel)
 	}
@@ -138,7 +142,7 @@ func cmp(got, want []byte) error {
 func roundtrip(b, ebuf, dbuf []byte) error {
 	bOrg := make([]byte, len(b))
 	copy(bOrg, b)
-	for level := LevelFastest; level <= LevelSmallest; level++ {
+	for level := LevelFastest; level <= LevelSmallestSIMD; level++ {
 		asmEnc, err := Encode(nil, b, level)
 		if err != nil {
 			return err
@@ -1532,6 +1536,11 @@ func testFile(t *testing.T, i, repeat int) {
 			d := data
 			testBlockRoundtrip(t, d, LevelSmallest)
 		})
+		for _, level := range simdLevels {
+			t.Run(fmt.Sprint("block-", level), func(t *testing.T) {
+				testBlockRoundtrip(t, data, level)
+			})
+		}
 	})
 }
 
@@ -1558,6 +1567,11 @@ func TestDataRoundtrips(t *testing.T) {
 			d := data
 			testBlockRoundtrip(t, d, LevelSmallest)
 		})
+		for _, level := range simdLevels {
+			t.Run(fmt.Sprint("block-", level), func(t *testing.T) {
+				testBlockRoundtrip(t, data, level)
+			})
+		}
 	}
 	t.Run("longblock", func(t *testing.T) {
 		data := make([]byte, 8<<20)
@@ -1798,7 +1812,7 @@ func TestLeadingNonSkippableBlockNonReg(t *testing.T) {
 // decodeGo is the same as Decode, but only using Go for MinLZ.
 // Should Only be used for MinLZ blocks.
 func decodeGo(dst, src []byte) ([]byte, error) {
-	isMLZ, lits, block, dLen, err := isMinLZ(src)
+	isMLZ, lits, simd, block, dLen, err := isMinLZ(src)
 	if err != nil {
 		return nil, err
 	}
@@ -1815,6 +1829,9 @@ func decodeGo(dst, src []byte) ([]byte, error) {
 		dst = dst[:dLen]
 	} else {
 		dst = make([]byte, dLen)
+	}
+	if simd {
+		return dst, decodeSIMD(dst, block)
 	}
 	if minLZDecodeGo(dst, block) != 0 {
 		return dst, ErrCorrupt

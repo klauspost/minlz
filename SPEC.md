@@ -1,6 +1,6 @@
-# MINLZ FORMAT SPECIFICATION V1.0.1
+# MINLZ FORMAT SPECIFICATION V1.1.0
 
-All implementations are requested to state: "This implements the MinLZ specification v1.0"
+All implementations are requested to state: "This implements the MinLZ specification v1.1"
 
 Furthermore, if a subset of features is supported, it should state this clearly.
 
@@ -12,6 +12,9 @@ The spec versioning follows [semantic versioning](https://semver.org/).
 * Major version numbers indicate breaking changes.
 * Minor version numbers indicate added functionality that will not be readable by previous versions.
 * Patch version numbers indicate non-breaking additions to the spec.
+
+* v1.0: Initial release.
+* v1.1: Adds [SIMD Blocks](SIMD_SPEC.md).
 
 # BLOCK FORMAT
 
@@ -40,6 +43,7 @@ of the block if this value is non-zero.
 
 A block starts with the uncompressed length up to a maximum of 2^24,
 stored as an unsigned varint.
+Bits 24-31 of the varint are the block type ([SIMD_SPEC.md](SIMD_SPEC.md) 1.0); MinLZ blocks are type 0.
 
 Maximum uncompressed block size is 8 MiB = 8,388,608 bytes.
 
@@ -330,10 +334,11 @@ be extended in the future.
 | ID      | Description                   | See Section |
 |---------|-------------------------------|-------------|
 | 0       | (legacy compressed Data)      | 4.3         |
-| 1       | Uncompressed Data             | 4.3         |
+| 1       | Uncompressed Data             | 4.2         |
 | 2, 3    | MinLZ Compressed Block        | 4.4, 4.5    |
+| 16      | MinLZ SIMD Block              | 4.5B        |
 | 32      | EOF                           | 4.6         |
-| 4-63    | (reserved, non-skippable)     | 4.8         |
+| 0-63    | (non-skippable)               | 4.8         |
 | 64      | Stream Index                  | 4.12        |
 | 65-127  | (reserved, skippable)         | 4.9         |
 | 128-191 | (user defined, skippable)     | 4.10        |
@@ -352,11 +357,12 @@ This means that a valid MinLZ framed stream always starts with the bytes:
 
 The final byte of the identifier is a block size indicator.
 
-| Bits | Description               |
-|------|---------------------------|
-| 0-3  | Max block size indicator  |
-| 4-5  | Reserved, must be ignored |
-| 6-7  | Reserved, must be 0       |
+| Bits | Description                                                     |
+|------|-----------------------------------------------------------------|
+| 0-3  | Max block size indicator                                        |
+| 4-5  | Reserved, must be ignored                                       |
+| 6    | Stream contains [SIMD Block(s)](SIMD_SPEC.md) (chunk type 0x10) |
+| 7    | Reserved, must be 0                                             |
 
 #### 4.1.1 Max Block Size
 
@@ -412,6 +418,18 @@ as well as blocks with decompressed size less than compressed size.
 
 If possible prefer type `0x02` over this.
 
+### 4.5B. MinLZ SIMD Block (chunk type 0x10).
+
+A [SIMD block](SIMD_SPEC.md) *without* the MinLZ indicator (initial 0 byte).
+
+An [xxhash3](https://github.com/Cyan4973/xxHash#xxhash---extremely-fast-hash-algorithm)
+(XXH3 64-bit, seed 0) of the *uncompressed* data is stored as little endian value at the start of the block.
+
+The stream identifier *must* indicate that SIMD blocks are present (bit 6 set).
+Otherwise, the decoder should reject the stream.
+
+See [SIMD_SPEC.md](SIMD_SPEC.md) for details on SIMD blocks.
+
 ### 4.6 EOF (chunk type 0x20)
 
 The end of the stream is indicated by a chunk with the ID `0x20`.
@@ -439,7 +457,7 @@ All bytes of the padding chunk, except the chunk byte itself and the length,
 should be zero, but decompressors must not try to interpret or verify the
 padding data in any way.
 
-### 4.8. Reserved unskippable chunks (chunk types 0x04-0x3f)
+### 4.8. Reserved unskippable chunks (chunk types 0x04-0x0f, 0x11-0x1f, 0x21-0x3f)
 
 These are reserved for future expansion. A decoder that sees such a chunk
 should immediately return an error, as it must assume it cannot decode the
@@ -450,7 +468,7 @@ Future versions of this specification may define meanings for these chunks.
 ### 4.9. Reserved skippable chunks (chunk types 0x40-0x7f)
 
 These are also reserved for future expansion, but unlike the chunks
-described in 4.5, a decoder seeing these must skip them and continue
+described in 4.8, a decoder seeing these must skip them and continue
 decoding.
 
 Future versions of this specification may define meanings for these chunks.
@@ -574,7 +592,7 @@ To decode from any given uncompressed offset `(wantOffset)`:
 
 This is similar to S2, except the ID is 0x40 instead of 0x99.
 
-### 4.12 Block Search (chunk type 0x44 -> 0x47) — OPTIONAL
+### 4.13 Block Search (chunk type 0x44 -> 0x47) — OPTIONAL
 
 See [SPEC_SEARCH.md](SPEC_SEARCH.md) for details.
 
@@ -593,8 +611,9 @@ Formats like xz/bzip2 also offer excellent compression, but these offer even mor
 
 ## No entropy nor dynamic encoding
 
-MinLZ by design only offers static encoding types and no entropy coding of remainder literals, 
+MinLZ blocks by design only offer static encoding types and no entropy coding of remainder literals,
 making decoding possible with no tables.
+[SIMD blocks](SIMD_SPEC.md) add Huffman coding, laid out to decode with SIMD.
 
 While it was considered, all conditional decoding (decoding based on previous operation or output position)
 was avoided to simplify the decoder.

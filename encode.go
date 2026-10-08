@@ -43,6 +43,38 @@ const (
 	// There is no speed target for this level.
 	LevelSmallest = 3
 
+	// The SIMD levels write SIMD blocks (SIMD_SPEC.md), which need a decoder for MinLZ v1.1 or later.
+	// For now they can only be used for blocks: Encode, TryEncode and AppendEncoded.
+
+	// LevelSuperFastSIMD is the fastest compression level.
+	// This will take significant shortcuts and usually provide much worse compression.
+	// Use only if LevelFastestSIMD is confirmed to be too slow.
+	LevelSuperFastSIMD = 4
+
+	// LevelFastestSIMD is the fastest compression level.
+	// SIMD will provide better compression AND decompress faster
+	// on platforms where SIMD is available.
+	LevelFastestSIMD = 5
+
+	// LevelBalancedSIMD is the balanced compression level.
+	// This is targeted to be approximately half the speed of LevelFastestSIMD.
+	// SIMD will provide better compression AND decompress faster
+	// on platforms where SIMD is available.
+	LevelBalancedSIMD = 6
+
+	// LevelSmallestSIMD will attempt the best possible compression.
+	// There is no speed target for this level.
+	// SIMD will provide better compression AND decompress faster
+	// on platforms where SIMD is available.
+	LevelSmallestSIMD = 7
+
+	// LevelSIMDDelta will encode delta literals in SIMD mode.
+	// This is mainly useful for binary encoded data and has a small decode penalty.
+	// Use as a flag, ie LevelSIMDDelta | LevelBalancedSIMD.
+	// LevelSmallestSIMD will always try both modes.
+	// Valid with LevelSuperFastSIMD, LevelFastestSIMD and LevelBalancedSIMD.
+	LevelSIMDDelta = 256
+
 	// Internal use only
 	copyLitBits = 2
 
@@ -102,6 +134,10 @@ func Encode(dst, src []byte, level int) ([]byte, error) {
 		n = encodeBlockBetter(dst[d:], src)
 	case LevelSmallest:
 		n = encodeBlockBest(dst[d:], src, nil)
+	case LevelSuperFastSIMD, LevelFastestSIMD, LevelBalancedSIMD, LevelSmallestSIMD,
+		LevelSuperFastSIMD | LevelSIMDDelta, LevelFastestSIMD | LevelSIMDDelta, LevelBalancedSIMD | LevelSIMDDelta:
+		d = 1
+		n = encodeBlockSIMD(dst[d:], src, level)
 	default:
 		return nil, ErrInvalidLevel
 	}
@@ -118,7 +154,14 @@ func Encode(dst, src []byte, level int) ([]byte, error) {
 
 			block := dst[d : d+n]
 			dst := make([]byte, len(src))
-			ret := minLZDecode(dst, block)
+			ret := 0
+			if level >= LevelSuperFastSIMD {
+				if _, b, err := simdHeader(block); err != nil || decodeSIMD(dst, b) != nil {
+					ret = 1
+				}
+			} else {
+				ret = minLZDecode(dst, block)
+			}
 			if !bytes.Equal(dst, src) {
 				n := matchLen(dst, src)
 				x := crc32.ChecksumIEEE(src)
@@ -194,6 +237,10 @@ func TryEncode(dst, src []byte, level int) []byte {
 		n = encodeBlockBetter(dst[d:], src)
 	case LevelSmallest:
 		n = encodeBlockBest(dst[d:], src, nil)
+	case LevelSuperFastSIMD, LevelFastestSIMD, LevelBalancedSIMD, LevelSmallestSIMD,
+		LevelSuperFastSIMD | LevelSIMDDelta, LevelFastestSIMD | LevelSIMDDelta, LevelBalancedSIMD | LevelSIMDDelta:
+		d = 1
+		n = encodeBlockSIMD(dst[d:], src, level)
 	default:
 		return nil
 	}

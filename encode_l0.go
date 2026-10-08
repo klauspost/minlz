@@ -278,6 +278,134 @@ emitRemainder:
 	return d
 }
 
+// encodeFastBlockGo parses src like the function encodeFastBlockGo, without its size and offset limits.
+func (e *simdEncoder) encodeFastBlockGo(src []byte) {
+	const (
+		tableBits    = 13
+		maxTableSize = 1 << tableBits
+		skipLog      = 5
+	)
+	var table [maxTableSize]uint32
+	sLimit := len(src) - inputMargin
+	nextEmit := 0
+	s := 1
+	cv := load64(src, s)
+	repeat := 1
+	for {
+		candidate := 0
+		for {
+			nextS := s + (s-nextEmit)>>skipLog + 5
+			if nextS > sLimit {
+				goto emitRemainder
+			}
+			hash0 := hash8(cv, tableBits)
+			cv1 := load64(src, s+1)
+			hash1 := hash8(cv1, tableBits)
+			candidate = int(table[hash0])
+			candidate2 := int(table[hash1])
+			table[hash0] = uint32(s)
+			table[hash1] = uint32(s + 1)
+			cv2 := load64(src, s+2)
+			hash2 := hash8(cv2, tableBits)
+
+			const checkRep = 1
+			if uint32(cv1) == load32(src, s-repeat+checkRep) {
+				base := s + checkRep
+				for i := base - repeat; base > nextEmit && i > 0 && src[i-1] == src[base-1]; {
+					i--
+					base--
+				}
+				candidate := s - repeat + 4 + checkRep
+				s += 4 + checkRep
+				for s <= sLimit {
+					if diff := load64(src, s) ^ load64(src, candidate); diff != 0 {
+						s += bits.TrailingZeros64(diff) >> 3
+						break
+					}
+					s += 8
+					candidate += 8
+				}
+				e.emitRepeatLits(src[nextEmit:base], s-base)
+				nextEmit = s
+				if s >= sLimit {
+					goto emitRemainder
+				}
+				cv = load64(src, s)
+				continue
+			}
+
+			if cv == load64(src, candidate) {
+				break
+			}
+			candidate = int(table[hash2])
+			if cv1 == load64(src, candidate2) {
+				table[hash2] = uint32(s + 2)
+				candidate = candidate2
+				s++
+				break
+			}
+			table[hash2] = uint32(s + 2)
+			if cv2 == load64(src, candidate) {
+				s += 2
+				break
+			}
+			cv = load64(src, nextS)
+			s = nextS
+		}
+
+		base := s
+		repeat = base - candidate
+		s += 8
+		candidate += 8
+		for s <= len(src)-8 {
+			if diff := load64(src, s) ^ load64(src, candidate); diff != 0 {
+				s += bits.TrailingZeros64(diff) >> 3
+				break
+			}
+			s += 8
+			candidate += 8
+		}
+		e.emitCopyLits(src[nextEmit:base], repeat, s-base)
+
+		for {
+			nextEmit = s
+			if s >= sLimit {
+				goto emitRemainder
+			}
+			x := load64(src, s-2)
+			m2Hash := hash8(x, tableBits)
+			x = load64(src, s)
+			currHash := hash8(x, tableBits)
+			candidate = int(table[currHash])
+			table[m2Hash] = uint32(s - 2)
+			table[currHash] = uint32(s)
+			if x != load64(src, candidate) {
+				cv = load64(src, s+1)
+				s++
+				break
+			}
+			repeat = s - candidate
+			base = s
+			s += 8
+			candidate += 8
+			for s <= len(src)-8 {
+				if diff := load64(src, s) ^ load64(src, candidate); diff != 0 {
+					s += bits.TrailingZeros64(diff) >> 3
+					break
+				}
+				s += 8
+				candidate += 8
+			}
+			e.emitCopy(repeat, s-base)
+		}
+	}
+
+emitRemainder:
+	if nextEmit < len(src) {
+		e.emitLiterals(src[nextEmit:])
+	}
+}
+
 func encodeFastBlockGo64K(dst, src []byte) (d int) {
 	// Initialize the hash table.
 	const (

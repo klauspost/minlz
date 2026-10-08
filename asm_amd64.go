@@ -214,3 +214,33 @@ func matchLen(a []byte, b []byte) int
 //
 //go:noescape
 func decodeBlockAsm(dst []byte, src []byte) int
+
+// simdExecAVX2 runs the first n operations of a chunk. st holds the output position,
+// the literal position, the repeat offset and an error flag.
+//
+//go:noescape
+func simdExecAVX2(dst *byte, lits *byte, tok *byte, ll *byte, offc *byte, raw *byte, esc *byte, n int, st *[4]int)
+
+// simdExecDeltaAVX2 runs the first n operations of a chunk. st holds the output position,
+// the literal position, the repeat offset and an error flag.
+//
+//go:noescape
+func simdExecDeltaAVX2(dst *byte, lits *byte, tok *byte, ll *byte, offc *byte, raw *byte, esc *byte, n int, st *[4]int)
+
+// simdTokStatsAVX2 returns the token statistics of n bytes, a multiple of 32.
+// lit and esc are counted 2 and 4 times.
+//
+//go:noescape
+func simdTokStatsAVX2(b *byte, n int) (out int, lit int, rep int, esc int, ok bool)
+
+// simdLLStatsAVX2 returns the sum of n bytes, a multiple of 32, and how many are 33.
+// ok is false if a byte is outside 1-33.
+//
+//go:noescape
+func simdLLStatsAVX2(b *byte, n int) (sum int, esc int, ok bool)
+
+// simdOffStatsAVX2 returns the sum of b>>3 over n bytes, a multiple of 32, and how often it is 0.
+// ok is false if a byte is outside 1-175.
+//
+//go:noescape
+func simdOffStatsAVX2(b *byte, n int) (sum int, zeros int, ok bool)

@@ -17,8 +17,11 @@
 package minlz
 
 import (
+	"github.com/klauspost/cpuid/v2"
 	"github.com/minio/minlz/internal/race"
 )
+
+var simdAVX2 = cpuid.CPU.Supports(cpuid.AVX2, cpuid.BMI2)
 
 // minLZDecode writes the decoding of src to dst. It assumes that the varint-encoded
 // length of the decompressed bytes has already been read, and that len(dst)
@@ -33,4 +36,44 @@ func minLZDecode(dst, src []byte) int {
 	race.ReadSlice(src)
 	race.WriteSlice(dst)
 	return decodeBlockAsm(dst, src)
+}
+
+// simdExec runs the first n operations of c. See simdExecGo.
+func simdExec(dst, lits []byte, c *simdChunk, n int, st *[4]int) {
+	if !simdAVX2 {
+		simdExecGo(dst, lits, c, n, st)
+		return
+	}
+	if c.delta {
+		simdExecDeltaAVX2(&dst[0], &lits[0], &c.tok[0], &c.ll[0], &c.offc[0], &c.raw[0], &c.esc[0], n, st)
+		return
+	}
+	simdExecAVX2(&dst[0], &lits[0], &c.tok[0], &c.ll[0], &c.offc[0], &c.raw[0], &c.esc[0], n, st)
+}
+
+// simdTokStatsAsm returns the statistics of a prefix of tok, and its length. See simdTokStats.
+func simdTokStatsAsm(tok []byte) (out, nLit, nRep, nEsc, n int, ok bool) {
+	if n = len(tok) &^ 31; !simdAVX2 || n == 0 {
+		return 0, 0, 0, 0, 0, true
+	}
+	out, lit, rep, esc, ok := simdTokStatsAVX2(&tok[0], n)
+	return out, lit >> 1, rep, esc >> 2, n, ok
+}
+
+// simdLLStatsAsm returns the statistics of a prefix of ll, and its length. See simdLLStats.
+func simdLLStatsAsm(ll []byte) (sum, nEsc, n int, ok bool) {
+	if n = len(ll) &^ 31; !simdAVX2 || n == 0 {
+		return 0, 0, 0, true
+	}
+	sum, nEsc, ok = simdLLStatsAVX2(&ll[0], n)
+	return sum, nEsc, n, ok
+}
+
+// simdOffStatsAsm returns the raw bits of a prefix of offc, and its length. See simdOffStats.
+func simdOffStatsAsm(offc []byte) (bits, n int, ok bool) {
+	if n = len(offc) &^ 31; !simdAVX2 || n == 0 {
+		return 0, 0, true
+	}
+	sum, zeros, ok := simdOffStatsAVX2(&offc[0], n)
+	return sum - n + zeros, n, ok
 }

@@ -16,6 +16,7 @@ package minlz
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -75,8 +76,8 @@ func FuzzEncodingBlocks(f *testing.F) {
 			}
 		}(decDst[len(decDst)-4:])
 		decDst = decDst[:len(data):len(data)]
-		const levelReference = LevelSmallest + 1
-		for l := LevelSuperFast; l <= levelReference; l++ {
+		const levelReference = LevelSmallestSIMD + 1
+		for _, l := range append(append([]int{LevelSuperFast, LevelUncompressed, LevelFastest, LevelBalanced, LevelSmallest}, simdLevels...), levelReference) {
 			for i := range decDst {
 				decDst[i] = 0xfe
 			}
@@ -84,8 +85,8 @@ func FuzzEncodingBlocks(f *testing.F) {
 				compDst[i] = 0xff
 			}
 			var comp []byte
-			if l < levelReference {
-				comp, _ = Encode(nil, data, l)
+			if l != levelReference {
+				comp, _ = Encode(compDst, data, l)
 			} else {
 				comp, _ = reference.EncodeBlock(data)
 			}
@@ -125,8 +126,10 @@ func FuzzEncodingBlocks(f *testing.F) {
 func FuzzDecodeBlock(f *testing.F) {
 	enc := NewWriter(nil, WriterBlockSize(8<<10))
 	addCompressed := func(b []byte) {
-		if b2, err := Encode(nil, b, LevelBalanced); err == nil {
-			f.Add(b2)
+		for _, l := range []int{LevelBalanced, LevelBalancedSIMD, LevelSmallestSIMD} {
+			if b2, err := Encode(nil, b, l); err == nil {
+				f.Add(b2)
+			}
 		}
 		f.Add(s2.EncodeBetter(nil, b))
 		var buf bytes.Buffer
@@ -185,6 +188,16 @@ func FuzzDecodeBlock(f *testing.F) {
 				break
 			}
 		}
+		if _, _, simd, _, _, _ := isMinLZ(data); simd {
+			ref, refErr := reference.DecodeSIMDBlock(data)
+			if hasErr != (refErr != nil) {
+				t.Fatalf("base err: %v, reference: %v", baseErr, refErr)
+			}
+			if !hasErr && (!bytes.Equal(base, ref) || !bytes.Equal(base, got)) {
+				t.Fatal("SIMD block mismatch")
+			}
+			return
+		}
 		if hasErr {
 			if hasAsm {
 				isLz, sz, mzErr := IsMinLZ(data)
@@ -236,6 +249,47 @@ func FuzzDecodeBlock(f *testing.F) {
 			}
 			if !bytes.Equal(base, got) {
 				t.Error("Reference mismatch")
+			}
+		}
+	})
+}
+
+// FuzzDecodeSIMD decodes SIMD blocks with a valid header and compares with the reference decoder.
+// body is the block from its flags byte. The decoded size is len(body) plus the 64 bytes
+// the format requires, plus extra.
+func FuzzDecodeSIMD(f *testing.F) {
+	add := func(b []byte) {
+		for _, l := range []int{LevelSuperFastSIMD, LevelBalancedSIMD, LevelSmallestSIMD, LevelFastestSIMD | LevelSIMDDelta} {
+			enc, _ := Encode(nil, b, l)
+			if _, _, simd, body, size, err := isMinLZ(enc); simd && err == nil {
+				f.Add(uint32(size-len(body)-4-simdMinSaving), body)
+			}
+		}
+	}
+	fuzz.ReturnFromZip(f, "testdata/enc_regressions.zip", fuzz.TypeRaw, add)
+	fuzz.ReturnFromZip(f, "testdata/fuzz/block-corpus-raw.zip", fuzz.TypeRaw, add)
+	f.Fuzz(func(t *testing.T, extra uint32, body []byte) {
+		// Larger blocks only cost memory: every check is per chunk or per literal block.
+		n := len(body) + 4 + simdMinSaving + int(extra)
+		if len(body) == 0 || n > 1<<20 {
+			return
+		}
+		src := append(binary.AppendUvarint([]byte{0}, simdBlockType<<24|uint64(n)), body...)
+		want, wantErr := reference.DecodeSIMDBlock(src)
+		// Output must not depend on what dst held before.
+		for _, fill := range []byte{0, 0xfe} {
+			dst := bytes.Repeat([]byte{fill}, n+64)
+			got, err := Decode(dst[:0:n], src)
+			if (err == nil) != (wantErr == nil) {
+				t.Fatalf("err: %v, reference: %v", err, wantErr)
+			}
+			if err == nil && !bytes.Equal(got, want) {
+				t.Fatal("reference mismatch")
+			}
+			for _, v := range dst[n:] {
+				if v != fill {
+					t.Fatal("dst overwritten beyond cap")
+				}
 			}
 		}
 	})

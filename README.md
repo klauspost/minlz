@@ -21,6 +21,7 @@ compression ratio while retaining a high decompression speed.
 * AMD64 encoder+decoder assembly
 * ARM64 encoder+decoder assembly
 * Adjustable Compression (4 levels)
+* SIMD blocks: Huffman coded blocks that decode with SIMD
 * Concurrent stream Compression
 * Concurrent stream Decompression
 * Skip forward in compressed streams via independent blocks
@@ -34,9 +35,9 @@ compression ratio while retaining a high decompression speed.
 * Powerful commandline utility
 * Customizable Bloom Filter Stream Search 
 
-This package implements the MinLZ specification v1.0 in Go.
+This package implements the MinLZ specification v1.0 in Go, plus SIMD blocks from v1.1.
 
-For format specification see the included [SPEC.md](SPEC.md).
+For format specification see the included [SPEC.md](SPEC.md) and [SIMD_SPEC.md](SIMD_SPEC.md).
 
 # Changelog
 
@@ -75,6 +76,8 @@ which ensures against corruption and truncation.
 * Level 2, "Balanced": Provides a good balance between compression and speed. ~50% the speed of the fastest level.
 * Level 3, "Smallest": Provides the smallest output possible. Not tuned for speed.
 
+Levels 4 to 7 write SIMD blocks instead. See "SIMD Blocks" below.
+
 A secondary option to control speed/compression is adjusting the block size.
 See "Writer Block Size" section below.
 
@@ -112,6 +115,85 @@ Extra bytes given to decompression will return an error.
 It is possible to use `minlz.TryEncode`, which will only return compressed bytes if the output size 
 is strictly less than input.
 Use `minlz.AppendEncoded` and `minlz.AppendDecoded` to append to existing slices.
+
+## SIMD Blocks
+
+SIMD blocks are a block type added in v1.1 of the format, see [SIMD_SPEC.md](SIMD_SPEC.md).
+They store literals and operations in separate Huffman coded streams, laid out so they can be decoded with SIMD.
+
+Compared to MinLZ blocks at the same level, SIMD blocks are typically 16-28% smaller,
+and decode 1.4-1.8x faster on blocks of 256KB and more.
+Blocks below 64KB decode slower than MinLZ blocks (SuperFast up to 64KB), since each block carries its own Huffman tables.
+
+4 levels write SIMD blocks:
+
+* Level 4, `LevelSuperFastSIMD`: The fastest SIMD compression and decompression, at a reduced compression ratio.
+* Level 5, `LevelFastestSIMD`: Fast compression with a good compression ratio.
+* Level 6, `LevelBalancedSIMD`: A balance between compression and speed. ~50% the speed of level 5.
+* Level 7, `LevelSmallestSIMD`: The smallest output. Not tuned for speed.
+
+```Go
+   compressed, err := minlz.Encode(nil, src, minlz.LevelFastestSIMD)
+   if err != nil {
+       // Handle error
+   }
+
+   // Decode handles both block types.
+   decompressed, err := minlz.Decode(nil, compressed)
+```
+
+`LevelSIMDDelta` can be added to levels 4 to 6, for example `minlz.LevelBalancedSIMD | minlz.LevelSIMDDelta`.
+Literals are then stored as the difference to the bytes at the last match offset.
+This mainly helps binary data, like tables of numbers, but makes text larger and costs decompression speed.
+Level 7 decides this itself.
+
+SIMD blocks can currently be used with `Encode`, `TryEncode`, `AppendEncoded` and the decoding functions.
+Stream support will follow. Older versions of this package cannot decode SIMD blocks.
+
+Decompression uses AVX2 on amd64 CPUs with AVX2 and BMI2; other platforms use Go.
+The SIMD encoders are Go only for now.
+
+Each row compares a SIMD level with the MinLZ level of the same name, for example `LevelFastestSIMD` with `LevelFastest`.
+Speeds are shown as MinLZ → SIMD, with the SIMD speed relative to MinLZ.
+Single core, geometric mean of 14 data sets (logs, JSON, CSV, text, databases, backups, tar files),
+split into blocks of each size, on an AMD Ryzen 9 9950X.
+The MinLZ levels use assembly encoders; the SIMD encoders are Go only for now.
+
+| Level     | Block | Output size |     Compression MB/s |    Decompression MB/s |
+|-----------|-------|------------:|---------------------:|----------------------:|
+| SuperFast | 4KB   |      -21.3% |   3,004 → 302 (0.1x) |  6,440 → 2,730 (0.4x) |
+| SuperFast | 16KB  |      -25.8% |   3,082 → 646 (0.2x) |  6,340 → 3,870 (0.6x) |
+| SuperFast | 64KB  |      -28.4% | 3,115 → 1,196 (0.4x) |  6,330 → 5,870 (0.9x) |
+| SuperFast | 256KB |      -26.6% | 2,733 → 1,640 (0.6x) |  6,120 → 8,360 (1.4x) |
+| SuperFast | 1MB   |      -26.8% | 2,671 → 1,789 (0.7x) |  6,130 → 9,260 (1.5x) |
+| SuperFast | 8MB   |      -23.1% | 2,465 → 1,855 (0.8x) | 6,360 → 10,140 (1.6x) |
+
+| Level     | Block | Output size |     Compression MB/s |    Decompression MB/s |
+|-----------|-------|------------:|---------------------:|----------------------:|
+| Fastest   | 4KB   |      -10.7% |   1,486 → 267 (0.2x) |  3,360 → 2,710 (0.8x) |
+| Fastest   | 16KB  |      -17.5% |   1,852 → 552 (0.3x) |  4,160 → 3,670 (0.9x) |
+| Fastest   | 64KB  |      -21.9% |   2,102 → 948 (0.5x) |  4,950 → 5,700 (1.2x) |
+| Fastest   | 256KB |      -22.1% | 1,965 → 1,243 (0.6x) |  4,970 → 7,870 (1.6x) |
+| Fastest   | 1MB   |      -20.3% | 1,883 → 1,320 (0.7x) |  4,900 → 8,550 (1.7x) |
+| Fastest   | 8MB   |      -19.4% | 1,788 → 1,330 (0.7x) |  5,020 → 8,800 (1.8x) |
+
+| Level     | Block | Output size |     Compression MB/s |    Decompression MB/s |
+|-----------|-------|------------:|---------------------:|----------------------:|
+| Balanced  | 4KB   |      -10.4% |   1,077 → 192 (0.2x) |  3,550 → 2,340 (0.7x) |
+| Balanced  | 16KB  |      -16.0% |   1,104 → 355 (0.3x) |  3,820 → 3,370 (0.9x) |
+| Balanced  | 64KB  |      -17.9% |   1,083 → 511 (0.5x) |  4,170 → 5,210 (1.2x) |
+| Balanced  | 256KB |      -17.6% |   1,049 → 587 (0.6x) |  4,380 → 7,030 (1.6x) |
+| Balanced  | 1MB   |      -16.8% |     997 → 596 (0.6x) |  4,500 → 7,790 (1.7x) |
+| Balanced  | 8MB   |      -16.2% |     956 → 595 (0.6x) |  4,800 → 8,070 (1.7x) |
+
+| Level     | Block | Output size |     Compression MB/s |    Decompression MB/s |
+|-----------|-------|------------:|---------------------:|----------------------:|
+| Smallest  | 4KB   |       -9.1% |       14 → 13 (0.9x) |  3,720 → 2,280 (0.6x) |
+| Smallest  | 16KB  |      -16.0% |       25 → 24 (1.0x) |  4,450 → 3,430 (0.8x) |
+| Smallest  | 64KB  |      -18.6% |       36 → 36 (1.0x) |  5,000 → 5,510 (1.1x) |
+| Smallest  | 256KB |      -19.1% |       46 → 49 (1.1x) |  5,290 → 7,920 (1.5x) |
+| Smallest  | 1MB   |      -19.1% |       56 → 61 (1.1x) |  5,620 → 8,930 (1.6x) |
+| Smallest  | 8MB   |      -19.4% |       65 → 72 (1.1x) |  6,370 → 9,210 (1.4x) |
 
 ## Streams
 

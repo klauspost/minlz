@@ -1,0 +1,701 @@
+// Copyright 2026 MinIO Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package minlz
+
+import (
+	"encoding/binary"
+	"math/bits"
+	"slices"
+	"sync"
+
+	"github.com/klauspost/pivco"
+)
+
+const (
+	// simdChunkLimit is the chunk limit value of the header flags.
+	simdChunkLimit = 4
+	simdChunkOps   = 1024 << simdChunkLimit
+	// simdMaxLong is the longest literal run or match of an operation, with an escape.
+	simdMaxLong = simdMaxLen + 1 + 255
+	// simdBlockBits estimates the overhead of a pivco block.
+	simdBlockBits = 32 * 8
+	// simdMinCoded is the fewest values that, at one bit each, code smaller than stored.
+	simdMinCoded = simdBlockBits/7 + 1
+	// simdRecordMax is the size of the largest chunk record: flags, 5 sizes and 4 tables.
+	simdRecordMax = 1 + 5*3 + 68 + 17 + 88 + 128
+	// simdTableBits is added to the cost of a new table, since every table costs decode time.
+	simdTableBits = 64 * 8
+)
+
+// simdTable is a table with its code lengths and its serialized form.
+type simdTable struct {
+	t    pivco.Table
+	lens [256]uint8
+	mode int // simdCodeLens, simdClassLens or simdDeltaLens
+	n    int
+	b    [128]byte
+}
+
+// simdEncoder builds SIMD blocks. Parsers emit operations, which are coded a chunk at a time,
+// then finish codes the literals and writes the block.
+type simdEncoder struct {
+	pv  *pivco.Encoder
+	src []byte
+
+	// The streams of the current chunk. An offset has at most 20 raw bits.
+	tok, ll, offc                [simdChunkOps]byte
+	esc                          [2 * simdChunkOps]byte
+	raw                          [simdChunkOps * 20 / 8]byte
+	nTok, nLL, nOffc, nEsc, nRaw int
+	acc                          uint64
+	nacc                         int
+	overlap                      bool // a match of the chunk overlaps its output
+
+	// The literals of the block, and as delta literals. With delta literals only, dlits is lits.
+	buf, lits, dlits []byte
+	nLits            int
+	// opLits ends the literals of the operations, and chunkLits starts those of the current chunk.
+	// switches holds the literal positions where plain and delta literals take turns, starting with plain.
+	opLits, chunkLits int
+	switches          []int
+
+	pos, rep int
+	deltaDiv int // delta literals must save 1/deltaDiv of a chunk; 0 disables them, -1 uses only them
+	limit    int // largest size of the encoded block
+
+	out, litRecs, chunkRecs []byte
+	cur                     [simdLits + 1]simdTable
+	have                    [simdLits + 1]bool
+	tmp                     [3]simdTable
+	hist                    [256]uint64
+}
+
+var simdEncoders sync.Pool
+
+// encodeBlockSIMD encodes src to dst as a SIMD block without its indicator byte, and returns its size.
+// It returns 0 if the block would not save the level's minimum, and at least simdMinSaving bytes.
+func encodeBlockSIMD(dst, src []byte, level int) int {
+	e, _ := simdEncoders.Get().(*simdEncoder)
+	if e == nil {
+		pv, err := pivco.NewEncoder(pivco.WithBlockSize(pivco.MaxBlockSize), pivco.WithFlatLayout(pivco.FlatVertical))
+		if err != nil {
+			panic(err)
+		}
+		e = &simdEncoder{pv: pv}
+	}
+	e.out = dst[:0:len(dst)]
+	e.parse(src, level)
+	n := e.finish()
+	// Don't keep the buffers alive in the pool.
+	e.src, e.out = nil, nil
+	simdEncoders.Put(e)
+	return n
+}
+
+// parse codes the operations of src.
+func (e *simdEncoder) parse(src []byte, level int) {
+	delta := 0
+	if level&LevelSIMDDelta != 0 {
+		delta = -1
+	}
+	switch level &^ LevelSIMDDelta {
+	case LevelSuperFastSIMD:
+		e.reset(src, delta, len(src)>>3)
+		e.encodeFastBlockGo(src)
+	case LevelFastestSIMD:
+		e.reset(src, delta, len(src)>>5)
+		e.encodeBlockGo(src)
+	case LevelBalancedSIMD:
+		e.reset(src, delta, len(src)>>5)
+		e.encodeBlockBetterGo(src)
+	default:
+		e.reset(src, 256, 0)
+		e.encodeBlockBest(src)
+	}
+	if e.nTok > 0 {
+		e.endChunk()
+	}
+	if debugEncode && e.pos != len(e.src) {
+		panic("operations do not cover the block")
+	}
+}
+
+// reset starts a block for src, which must save at least save bytes. deltaDiv is as e.deltaDiv.
+func (e *simdEncoder) reset(src []byte, deltaDiv, save int) {
+	n := len(src)
+	size := n
+	if deltaDiv > 0 {
+		size += n
+	}
+	if cap(e.buf) < size {
+		e.buf = make([]byte, size)
+	}
+	e.lits, e.dlits = e.buf[:n], e.buf[n:size]
+	if deltaDiv < 0 {
+		e.dlits = e.lits
+	}
+	e.out = binary.AppendUvarint(e.out[:0], simdBlockType<<24|uint64(n))
+	e.out = append(e.out, simdChunkLimit)
+	// Operations are fewer than n/2, so this bounds the chunks and literal blocks.
+	// Each chunk can switch between plain and delta literals, which starts a literal block.
+	chunks := n/2/simdChunkOps + 2
+	parts := n/pivco.MaxBlockSize + chunks + 2
+	if cap(e.chunkRecs) < chunks*simdRecordMax {
+		e.chunkRecs, e.switches = make([]byte, 0, chunks*simdRecordMax), make([]int, 0, chunks+2)
+	}
+	if cap(e.litRecs) < parts*(3+128) {
+		e.litRecs = make([]byte, 0, parts*(3+128))
+	}
+	e.chunkRecs, e.switches = e.chunkRecs[:0], e.switches[:0]
+	e.nTok, e.nLL, e.nOffc, e.nEsc, e.nRaw, e.nLits = 0, 0, 0, 0, 0, 0
+	e.opLits, e.chunkLits = 0, 0
+	e.acc, e.nacc, e.overlap = 0, 0, false
+	e.src, e.pos, e.rep, e.deltaDiv, e.limit = src, 0, 1, deltaDiv, n-max(simdMinSaving, save)
+	e.have = [len(e.have)]bool{}
+}
+
+// emitLiterals adds the literals after the last operation.
+func (e *simdEncoder) emitLiterals(lits []byte) {
+	e.nLits += copy(e.lits[e.nLits:], lits)
+	e.pos += len(lits)
+}
+
+// emitCopyLits adds lits, then a match of length bytes at offset.
+func (e *simdEncoder) emitCopyLits(lits []byte, offset, length int) {
+	for len(lits) > simdMaxLong {
+		e.emitLong(lits[:simdMaxLong], e.rep, 1, 0)
+		lits = lits[simdMaxLong:]
+	}
+	prev := e.rep
+	e.rep = offset
+	if offset < 16 {
+		e.offc[e.nOffc] = byte(offset)
+	} else {
+		b := bits.Len(uint(offset)) - 1
+		e.offc[e.nOffc] = byte(8*b - 16 + offset>>(b-3)&7)
+		e.acc |= uint64(offset&(1<<(b-3)-1)) << e.nacc
+		if e.nacc += b - 3; e.nacc >= 32 {
+			binary.LittleEndian.PutUint32(e.raw[e.nRaw:], uint32(e.acc))
+			e.nRaw += 4
+			e.acc >>= 32
+			e.nacc -= 32
+		}
+	}
+	e.nOffc++
+	if len(lits) > simdMaxLen || length > simdMaxLen {
+		e.emitLong(lits, prev, 0, length)
+		return
+	}
+	var t byte
+	if len(lits) > 0 {
+		t = 2
+		e.ll[e.nLL] = byte(len(lits))
+		e.nLL++
+		if e.deltaDiv != 0 {
+			e.deltaLits(lits, prev)
+		} else {
+			e.nLits += copy(e.lits[e.nLits:], lits)
+		}
+		e.pos += len(lits)
+	}
+	e.overlap = e.overlap || offset < length
+	e.tok[e.nTok] = t | byte(length)<<2
+	e.nTok++
+	e.pos += length
+	if e.nTok == simdChunkOps {
+		e.endChunk()
+	}
+}
+
+// emitRepeatLits adds lits, then a match of length bytes at the repeat offset.
+func (e *simdEncoder) emitRepeatLits(lits []byte, length int) {
+	for len(lits) > simdMaxLong {
+		e.emitLong(lits[:simdMaxLong], e.rep, 1, 0)
+		lits = lits[simdMaxLong:]
+	}
+	if len(lits) > simdMaxLen || length > simdMaxLen {
+		e.emitLong(lits, e.rep, 1, length)
+		return
+	}
+	t := byte(1)
+	if len(lits) > 0 {
+		t |= 2
+		e.ll[e.nLL] = byte(len(lits))
+		e.nLL++
+		if e.deltaDiv != 0 {
+			e.deltaLits(lits, e.rep)
+		} else {
+			e.nLits += copy(e.lits[e.nLits:], lits)
+		}
+		e.pos += len(lits)
+	}
+	e.overlap = e.overlap || e.rep < length
+	e.tok[e.nTok] = t | byte(length)<<2
+	e.nTok++
+	e.pos += length
+	if e.nTok == simdChunkOps {
+		e.endChunk()
+	}
+}
+
+// emitCopy adds a match of length bytes at offset, without literals.
+func (e *simdEncoder) emitCopy(offset, length int) {
+	if debugEncode && e.pos == 0 {
+		panic("first operation without literals")
+	}
+	e.rep = offset
+	if offset < 16 {
+		e.offc[e.nOffc] = byte(offset)
+	} else {
+		b := bits.Len(uint(offset)) - 1
+		e.offc[e.nOffc] = byte(8*b - 16 + offset>>(b-3)&7)
+		e.acc |= uint64(offset&(1<<(b-3)-1)) << e.nacc
+		if e.nacc += b - 3; e.nacc >= 32 {
+			binary.LittleEndian.PutUint32(e.raw[e.nRaw:], uint32(e.acc))
+			e.nRaw += 4
+			e.acc >>= 32
+			e.nacc -= 32
+		}
+	}
+	e.nOffc++
+	if length > simdMaxLen {
+		e.emitLong(nil, 0, 0, length)
+		return
+	}
+	e.overlap = e.overlap || offset < length
+	e.tok[e.nTok] = byte(length) << 2
+	e.nTok++
+	e.pos += length
+	if e.nTok == simdChunkOps {
+		e.endChunk()
+	}
+}
+
+// emitLong adds an operation with lits, at most simdMaxLong of them, and a match of length bytes at e.rep,
+// split into more operations if needed. t is the repeat bit of the operation, and prev the repeat offset before it.
+// The offset of the match must already be added.
+func (e *simdEncoder) emitLong(lits []byte, prev int, t byte, length int) {
+	if n := len(lits); n > 0 {
+		t |= 2
+		if n > simdMaxLen {
+			e.esc[e.nEsc] = byte(n - simdMaxLen - 1)
+			e.nEsc++
+			n = simdMaxLen + 1
+		}
+		e.ll[e.nLL] = byte(n)
+		e.nLL++
+		if e.deltaDiv != 0 {
+			e.deltaLits(lits, prev)
+		} else {
+			e.nLits += copy(e.lits[e.nLits:], lits)
+		}
+		e.pos += len(lits)
+	}
+	step := simdMaxLen
+	if e.rep >= simdMaxLen {
+		step = simdMaxLong
+	}
+	for {
+		n := min(length, step)
+		if n > simdMaxLen {
+			e.esc[e.nEsc] = byte(n - simdMaxLen - 1)
+			e.nEsc++
+			t |= (simdMaxLen + 1) << 2
+		} else {
+			t |= byte(n) << 2
+			e.overlap = e.overlap || e.rep < n
+		}
+		e.tok[e.nTok] = t
+		e.nTok++
+		e.pos += n
+		length -= n
+		if e.nTok == simdChunkOps {
+			e.endChunk()
+		}
+		if length == 0 {
+			return
+		}
+		t = 1
+	}
+}
+
+// deltaLits adds lits, and their delta literals (SIMD_SPEC.md 4.5), for an operation at e.pos with repeat offset rep.
+func (e *simdEncoder) deltaLits(lits []byte, rep int) {
+	n := e.nLits
+	e.nLits += copy(e.lits[n:], lits)
+	e.opLits = e.nLits
+	dl := e.dlits[n:e.nLits]
+	if e.deltaDiv > 0 {
+		copy(dl, lits)
+	}
+	r := min(rep, e.pos)
+	if r == 0 {
+		return
+	}
+	dl, ref := dl[:min(len(lits), simdMaxLen)], e.src[e.pos-r:]
+	if r >= simdMaxLen {
+		for j := range dl {
+			dl[j] -= ref[j]
+		}
+		return
+	}
+	for j := range dl {
+		dl[j] -= ref[j%r]
+	}
+}
+
+// endChunk codes the streams of the current chunk to e.out and its record to e.chunkRecs.
+func (e *simdEncoder) endChunk() {
+	for ; e.nacc > 0; e.nacc -= 8 {
+		e.raw[e.nRaw] = byte(e.acc)
+		e.nRaw++
+		e.acc >>= 8
+	}
+	e.acc, e.nacc = 0, 0
+	// A block that is already too large fails, so don't code more.
+	if len(e.out)+len(e.chunkRecs) <= e.limit {
+		var flags byte
+		if !e.overlap {
+			flags = 2
+		}
+		if e.deltaDiv < 0 {
+			flags |= 1
+		}
+		rec, size := len(e.chunkRecs), len(e.out)+len(e.chunkRecs)
+		e.chunkRecs = append(e.chunkRecs, flags)
+		e.chunkRecs = e.put(e.chunkRecs, simdTok, e.tok[:e.nTok])
+		e.chunkRecs = e.put(e.chunkRecs, simdLL, e.ll[:e.nLL])
+		e.chunkRecs = e.put(e.chunkRecs, simdOffc, e.offc[:e.nOffc])
+		e.chunkRecs = e.put(e.chunkRecs, simdEsc, e.esc[:e.nEsc])
+		if cap(e.out)-len(e.out) < e.nRaw {
+			e.limit = -1
+		} else {
+			e.out = append(e.out, e.raw[:e.nRaw]...)
+			e.chunkRecs = binary.AppendUvarint(e.chunkRecs, uint64(e.nRaw)<<3)
+		}
+		if e.deltaDiv > 0 && e.deltaChunk(len(e.out)+len(e.chunkRecs)-size) {
+			e.chunkRecs[rec] |= 1
+		}
+	}
+	e.nTok, e.nLL, e.nOffc, e.nEsc, e.nRaw, e.overlap = 0, 0, 0, 0, 0, false
+}
+
+// finish codes the literals and completes the block. It returns its size, or 0 if it is too large.
+func (e *simdEncoder) finish() int {
+	if len(e.out)+len(e.chunkRecs) > e.limit {
+		return 0
+	}
+	if len(e.chunkRecs) > 0 {
+		e.out = appendRvarint(append(e.out, e.chunkRecs...), uint64(len(e.chunkRecs)))
+	}
+	// The LZ section starts after the 4 byte size and the flags.
+	lz := len(e.out) - 5
+	e.litRecs = e.litRecs[:0]
+	// Plain and delta literals go in separate literal blocks. The literals after the operations are plain.
+	if len(e.switches)&1 == 1 {
+		e.switches = append(e.switches, e.opLits)
+	}
+	start := 0
+	for i, end := range append(e.switches, e.nLits) {
+		lits := e.lits[start:end]
+		if i&1 == 1 {
+			lits = e.dlits[start:end]
+		}
+		start = end
+		if len(lits) == 0 {
+			continue
+		}
+		parts := (len(lits) + pivco.MaxBlockSize - 1) / pivco.MaxBlockSize
+		size := (len(lits) + parts - 1) / parts
+		for j := 0; j < len(lits); j += size {
+			e.litRecs = e.put(e.litRecs, simdLits, lits[j:min(j+size, len(lits))])
+			if len(e.out)+len(e.litRecs) > e.limit {
+				return 0
+			}
+		}
+	}
+	e.out = appendRvarint(append(e.out, e.litRecs...), uint64(len(e.litRecs)))
+	e.out = appendRvarint(e.out, uint64(lz))
+	if len(e.out) > e.limit {
+		return 0
+	}
+	return len(e.out)
+}
+
+// deltaChunk reports whether the current chunk, with lz bytes of operations, takes delta literals:
+// when they are estimated to save 1/e.deltaDiv of the chunk. It records where the literals switch.
+func (e *simdEncoder) deltaChunk(lz int) bool {
+	start := e.chunkLits
+	e.chunkLits = e.opLits
+	if start == e.opLits {
+		return false
+	}
+	raw, delta := e.litBits(e.lits[start:e.opLits]), e.litBits(e.dlits[start:e.opLits])
+	d := raw-delta > (raw+8*lz)/e.deltaDiv
+	if d != (len(e.switches)&1 == 1) {
+		e.switches = append(e.switches, start)
+	}
+	return d
+}
+
+// litBits returns the estimated size of lits in bits.
+func (e *simdEncoder) litBits(lits []byte) int {
+	e.histogram(lits)
+	e.tmp[0].setCode(simdLits, &e.hist)
+	n, _ := e.tmp[0].cost(&e.hist)
+	return n
+}
+
+func (e *simdEncoder) histogram(v []byte) {
+	e.hist = [256]uint64{}
+	e.pv.Histogram(&e.hist, v)
+}
+
+// put appends the values v of stream k to e.out, and their entry to recs.
+// It takes the smallest of storing v, the current table and new tables for v.
+// If v doesn't fit, the block fails.
+func (e *simdEncoder) put(recs []byte, k int, v []byte) []byte {
+	var best *simdTable
+	bestBits := 8 * len(v)
+	try := func(t *simdTable, extra int) {
+		if n, ok := t.cost(&e.hist); ok && n+extra+simdBlockBits < bestBits {
+			best, bestBits = t, n+extra+simdBlockBits
+		}
+	}
+	if len(v) >= simdMinCoded {
+		e.histogram(v)
+		if e.have[k] {
+			try(&e.cur[k], 0)
+		}
+		e.tmp[0].setCode(k, &e.hist)
+		try(&e.tmp[0], simdTableBits+8*e.tmp[0].n)
+		e.tmp[1].setClass(k, &e.hist)
+		try(&e.tmp[1], simdTableBits+8*e.tmp[1].n)
+		if k == simdLits {
+			e.tmp[2].setClass(simdDelta, &e.hist)
+			try(&e.tmp[2], simdTableBits+8*e.tmp[2].n)
+		}
+	}
+	room := cap(e.out) - len(e.out)
+	if best != nil {
+		mode, n := simdCurrent, 0
+		if best != &e.cur[k] {
+			mode, n = best.mode, best.n
+			// Tables are only built when used.
+			if best.t.SetLengths(&best.lens, pivco.FlatVertical) != nil {
+				panic("invalid table")
+			}
+		}
+		// pivco writes in place when the output has room for the bound.
+		if bound := best.t.BlockBound(&e.hist); bound <= room {
+			out, err := e.pv.AppendEncodeBlockBound(e.out, v, &best.t, bound)
+			if err == nil && len(out)-len(e.out)+n < len(v) {
+				recs = binary.AppendUvarint(recs, uint64(len(out)-len(e.out))<<3|uint64(mode))
+				e.out = out
+				if mode != simdCurrent {
+					recs = append(recs, best.b[:n]...)
+					e.cur[k], e.have[k] = *best, true
+				}
+				return recs
+			}
+		}
+	}
+	if room < len(v) {
+		e.limit = -1
+		return recs
+	}
+	e.out = append(e.out, v...)
+	return binary.AppendUvarint(recs, uint64(len(v))<<3)
+}
+
+// cost returns the size in bits of histogram h coded with t, and false if a value has no code.
+func (t *simdTable) cost(h *[256]uint64) (int, bool) {
+	var n uint64
+	ok := true
+	for v, f := range h {
+		n += f * uint64(t.lens[v])
+		ok = ok && (f == 0 || t.lens[v] != 0)
+	}
+	return int(n), ok
+}
+
+// setCode sets t to the Huffman code of h, as code lengths of stream k. h must not be empty.
+func (t *simdTable) setCode(k int, h *[256]uint64) {
+	if err := pivco.BuildLengths(h, &t.lens); err != nil {
+		panic(err)
+	}
+	t.mode = simdCodeLens
+	t.setNibbles(t.lens[:2*simdCodeBytes[k]])
+}
+
+// setClass sets t to the class lengths of h for layout k (SIMD_SPEC.md 2.3).
+func (t *simdTable) setClass(k int, h *[256]uint64) {
+	var cl [24]uint8
+	n := 0
+	if k == simdTok {
+		n = simdTokClassLens(h, &cl, &t.lens)
+	} else {
+		lay := &simdLayouts[k]
+		var w [24]uint64
+		var lim [24]uint8
+		for v, c := range lay.class {
+			if c != 0xff {
+				w[c] += h[v]
+				lim[c] = max(lim[c], lay.in[v])
+			}
+		}
+		n = lay.n
+		for c := range lim[:n] {
+			lim[c] = pivco.MaxCodeLen - lim[c]
+		}
+		simdLimitedLens(w[:n], lim[:n], cl[:n])
+		for v, c := range lay.class {
+			t.lens[v] = 0
+			if c != 0xff && cl[c] != 0 {
+				t.lens[v] = cl[c] + lay.in[v]
+			}
+		}
+	}
+	t.mode = simdClassLens
+	if k == simdDelta {
+		t.mode = simdDeltaLens
+	}
+	t.setNibbles(cl[:n])
+}
+
+// simdTokClassLens sets cl to the token class lengths of h (SIMD_SPEC.md A.4),
+// and lens to the code lengths. It returns the number of class lengths.
+func simdTokClassLens(h *[256]uint64, cl *[24]uint8, lens *[256]uint8) int {
+	const groups = 14
+	grp := &simdLayouts[simdTok]
+	var w [groups]uint64
+	var fw [2][4]uint64
+	for v := range 136 {
+		w[grp.class[v>>2]] += h[v]
+		fw[v>>7][v&3] += h[v]
+	}
+	// Flag codes for match length codes 0-31 and 32-33.
+	f := [2][]uint8{cl[groups : groups+4], cl[groups+4 : groups+8]}
+	var maxF [2]uint8
+	for i := range f {
+		simdLimitedLens(fw[i][:], []uint8{3, 3, 3, 3}, f[i])
+		maxF[i] = slices.Max(f[i])
+	}
+	var lim [groups]uint8
+	for c := range lim {
+		lim[c] = pivco.MaxCodeLen
+	}
+	for ml := range 34 {
+		c := grp.class[ml]
+		lim[c] = min(lim[c], pivco.MaxCodeLen-grp.in[ml]-maxF[ml>>5])
+	}
+	simdLimitedLens(w[:], lim[:], cl[:groups])
+	*lens = [256]uint8{}
+	for v := range 136 {
+		ml := v >> 2
+		if g, fl := cl[grp.class[ml]], f[ml>>5][v&3]; g != 0 && fl != 0 {
+			lens[v] = g + grp.in[ml] + fl
+		}
+	}
+	return groups + 8
+}
+
+func (t *simdTable) setNibbles(l []uint8) {
+	t.n = (len(l) + 1) / 2
+	clear(t.b[:t.n])
+	for i, v := range l {
+		t.b[i/2] |= v << (4 * (i & 1))
+	}
+}
+
+// simdLimitedLens sets l to the lengths of an optimal complete prefix code for the weights w,
+// with l[i] <= lim[i], using package-merge. Weights of 0 get no code,
+// except that a code always has at least 2 lengths. len(w) must be at most 24.
+func simdLimitedLens(w []uint64, lim, l []uint8) {
+	clear(l)
+	var sym [24]uint8
+	n, maxLim := 0, uint8(0)
+	for i, x := range w {
+		if x > 0 {
+			sym[n] = uint8(i)
+			n++
+			maxLim = max(maxLim, lim[i])
+		}
+	}
+	if n < 2 {
+		for i := range l {
+			if w[i] > 0 || n < 2 {
+				if w[i] == 0 {
+					n++
+				}
+				l[i] = 1
+			}
+		}
+		return
+	}
+	s := sym[:n]
+	for i := 1; i < n; i++ {
+		for j := i; j > 0 && w[s[j]] < w[s[j-1]]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+	// items holds the symbol of each item of a level, or -1 for a package of two items of the level below.
+	// The selected items of a level are a prefix, and so are the items their packages select below.
+	var items [pivco.MaxCodeLen + 1][48]int8
+	var a, b [48]uint64
+	prev, cur := a[:0], b[:0]
+	for lev := maxLim; lev > 0; lev-- {
+		cur = cur[:0]
+		it := &items[lev]
+		for i, j := 0, 0; ; {
+			for i < n && lim[s[i]] < lev {
+				i++
+			}
+			if i < n && (j == len(prev) || w[s[i]] <= prev[j]) {
+				it[len(cur)] = int8(s[i])
+				cur = append(cur, w[s[i]])
+				i++
+			} else if j < len(prev) {
+				it[len(cur)] = -1
+				cur = append(cur, prev[j])
+				j++
+			} else {
+				break
+			}
+		}
+		prev = prev[:0]
+		for i := 0; i+1 < len(cur); i += 2 {
+			prev = append(prev, cur[i]+cur[i+1])
+		}
+	}
+	for lev, k := 1, 2*n-2; k > 0; lev++ {
+		p := 0
+		for _, x := range items[lev][:k] {
+			if x < 0 {
+				p++
+			} else {
+				l[x]++
+			}
+		}
+		k = 2 * p
+	}
+}
+
+func appendRvarint(b []byte, v uint64) []byte {
+	n := len(b)
+	b = binary.AppendUvarint(b, v)
+	slices.Reverse(b[n:])
+	return b
+}
