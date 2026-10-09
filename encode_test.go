@@ -1130,11 +1130,14 @@ func TestSIMDEncode(t *testing.T) {
 		return b
 	}
 	text := readFile(t, "testdata/Mark.Twain-Tom.Sawyer.txt")
+	tom := bytes.Repeat(text, n/len(text)+1)[:n]
 	inputs := map[string][]byte{
 		"zeros-1k":    make([]byte, 1024),
 		"zeros":       make([]byte, n),
 		"text-2k":     text[:2048],
-		"tom-sawyer":  bytes.Repeat(text, n/len(text)+1)[:n],
+		"tom-64k":     tom[:64<<10],
+		"tom-64k+1":   tom[:64<<10+1],
+		"tom-sawyer":  tom,
 		"words":       genEncText(rng, n),
 		"mixed":       genEncMixed(rng, n),
 		"period-3":    period(3),
@@ -1185,6 +1188,59 @@ func TestSIMDEncode(t *testing.T) {
 		t.Errorf("chunk flags not used: %v", flags)
 	}
 	t.Logf("modes %v, chunk flags %v", modes, flags)
+}
+
+// TestSIMDEncodeRoom checks that blocks don't depend on spare room in dst.
+// Skewed random bytes code close to the size limits of the levels.
+func TestSIMDEncodeRoom(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	big := make([]byte, MaxEncodedLen(16<<10)+64<<10)
+	for _, size := range []int{1 << 10, 4 << 10, 16 << 10} {
+		tight := make([]byte, MaxEncodedLen(size)-1)
+		for p := 0.01; p < 0.08; p += 0.002 {
+			src := make([]byte, size)
+			for i := range src {
+				src[i] = byte(min(255, rng.ExpFloat64()/p))
+			}
+			for _, level := range simdLevels {
+				n := encodeBlockSIMD(tight, src, level)
+				if m := encodeBlockSIMD(big, src, level); m != n || !bytes.Equal(big[:m], tight[:n]) {
+					t.Errorf("size %d p %.3f level %d: %d bytes with spare room, %d without", size, p, level, m, n)
+				}
+			}
+		}
+	}
+}
+
+// TestSIMDEncodeMaxChunks checks that a block fails when it would have more than simdMaxChunks chunks.
+// The parsers can't reach that, so this ends chunks early.
+func TestSIMDEncodeMaxChunks(t *testing.T) {
+	src := make([]byte, 8<<10)
+	pv, err := pivco.NewEncoder(pivco.WithBlockSize(pivco.MaxBlockSize), pivco.WithFlatLayout(pivco.FlatVertical))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []int{simdMaxChunks, simdMaxChunks + 1} {
+		dst := make([]byte, MaxEncodedLen(len(src)))
+		e := &simdEncoder{pv: pv, out: dst[1:1:len(dst)]}
+		e.reset(src, 0, 0)
+		e.emitCopyLits(src[:1], 1, simdMaxLen)
+		e.endChunk()
+		for range n - 1 {
+			e.emitRepeatLits(nil, simdMaxLen)
+			e.endChunk()
+		}
+		e.emitLiterals(src[e.pos:])
+		size := e.finish()
+		if (size > 0) != (n <= simdMaxChunks) {
+			t.Fatalf("%d chunks: block of %d bytes", n, size)
+		}
+		if size > 0 {
+			if got, err := Decode(nil, dst[:1+size]); err != nil || !bytes.Equal(got, src) {
+				t.Fatalf("%d chunks: %v", n, err)
+			}
+		}
+	}
 }
 
 // TestSIMDEncodeOps decodes encoded blocks with the strict reference decoder, which also checks the no-overlap flags.

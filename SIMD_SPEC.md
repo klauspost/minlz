@@ -44,6 +44,9 @@ Chunk limit values 6 and 7 are invalid. Encoders set the reserved hints to 0.
 
 The decoded size is at most 8 MiB = 8,388,608 bytes.
 
+A block has at most 128 chunks (4).
+With 16384 operations per chunk, that is an average of 4 bytes per operation in an 8 MiB block.
+
 The encoded block, everything after the indicator byte, must be at least 64 bytes smaller than the decoded size.
 
 ## 2 Block Layout
@@ -164,7 +167,7 @@ There is one chunk record per chunk, in order.
 
 A decoder reads `R`, then the chunk records forwards from their start.
 The chunks follow each other from the start of the section, and so do the streams of a chunk, with the sizes their entries give.
-The number of chunks follows from the chunk records.
+The number of chunks follows from the chunk records, and is at most 128 (1.1).
 
 ### 4.1 Chunk Records
 
@@ -616,6 +619,7 @@ The no-overlap flag (4.1) need not be checked (4.3).
 * Entry sizes that do not add up exactly to the data before the records.
 * A literal section without literal blocks, a literal block without literals, or one with more than 65535.
 * A chunk without operations, or with more than the chunk limit.
+* More than 128 chunks.
 * Chunk flag bits that must be 0 are set.
 
 ## B.3 Entries and Huffman Tables

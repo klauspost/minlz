@@ -942,6 +942,30 @@ func TestSIMDValidation(t *testing.T) {
 			}
 		})
 	}
+	t.Run("chunks", func(t *testing.T) {
+		for _, n := range []int{simdMaxChunks, simdMaxChunks + 1} {
+			ops := []simdTestOp{{ll: 1, ml: simdMaxLen, off: 1}}
+			for len(ops) < n {
+				ops = append(ops, simdTestOp{ml: simdMaxLen})
+			}
+			e, want := b.build(simdTestBlock{ops: ops, lits: []byte("a"), chunk: 1})
+			block := e.bytes()
+			if len(e.chunks) != n || len(block)-1+simdMinSaving > len(want) {
+				t.Fatalf("%d chunks, block of %d bytes for %d", len(e.chunks), len(block), len(want))
+			}
+			_, rerr := reference.DecodeSIMDBlock(block)
+			if n <= simdMaxChunks {
+				simdTestDecode(t, block, want)
+				if rerr != nil {
+					t.Fatalf("%d chunks: reference: %v", n, rerr)
+				}
+				continue
+			}
+			if _, err := Decode(nil, block); !errors.Is(err, ErrCorrupt) || rerr == nil {
+				t.Fatalf("%d chunks: %v, reference %v", n, err, rerr)
+			}
+		}
+	})
 	t.Run("64 bytes", func(t *testing.T) {
 		for _, n := range []int{100, 1000} {
 			src := append(binary.AppendUvarint(nil, 1<<24|uint64(n)), make([]byte, n-64-4)...)

@@ -30,6 +30,8 @@ const (
 	simdBlockType = 1
 	simdMinSaving = 64
 	simdMaxChunk  = 1024 << 5
+	// simdMaxChunks is the most chunks of a block.
+	simdMaxChunks = 128
 	simdMaxLen    = 32
 	// simdSlack is how far the fast loops write past the end of an operation.
 	simdSlack = 32
@@ -315,10 +317,10 @@ func (s *simdDecoder) ops(dst, body []byte, end, limit int, st *[4]int) bool {
 	}
 	r := simdReader{recs: body[end-n-int(t) : end-n], body: body, end: end - n - int(t)}
 	lits := s.lits[:cap(s.lits)]
-	for first := true; len(r.recs) > 0; first = false {
+	for i := 0; len(r.recs) > 0; i++ {
 		flags := r.recs[0]
 		r.recs = r.recs[1:]
-		if flags&0xf0 != 0 {
+		if flags&0xf0 != 0 || i == simdMaxChunks {
 			return false
 		}
 		c := simdChunk{delta: flags&1 != 0}
@@ -328,7 +330,7 @@ func (s *simdDecoder) ops(dst, body []byte, end, limit int, st *[4]int) bool {
 		}
 		c.tok = tok[:nTok]
 		out, nLit, nOff, nEsc, ok := simdTokStats(c.tok)
-		if !ok || first && c.tok[0]&2 == 0 {
+		if !ok || i == 0 && c.tok[0]&2 == 0 {
 			return false
 		}
 		if c.ll, c.nLL, _, ok = s.stream(&r, simdLL, nLit, nLit, s.ll[:]); !ok {

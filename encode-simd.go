@@ -62,6 +62,7 @@ type simdEncoder struct {
 	esc                          [2 * simdChunkOps]byte
 	raw                          [simdChunkOps * 20 / 8]byte
 	nTok, nLL, nOffc, nEsc, nRaw int
+	chunks                       int
 	acc                          uint64
 	nacc                         int
 	overlap                      bool // a match of the chunk overlaps its output
@@ -77,6 +78,9 @@ type simdEncoder struct {
 	splitLits bool
 	cuts, dp  []int
 	segs      [][256]uint32
+	// fastCode, when set, makes put build one table at most: code lengths for at least fastCode values,
+	// else class lengths. Building tables dominates the encoding of small blocks.
+	fastCode int
 
 	pos, rep int
 	deltaDiv int // delta literals must save 1/deltaDiv of a chunk; 0 disables them, -1 uses only them
@@ -85,7 +89,7 @@ type simdEncoder struct {
 	out, litRecs, chunkRecs []byte
 	cur                     [simdLits + 1]simdTable
 	have                    [simdLits + 1]bool
-	tmp                     [3]simdTable
+	tmp                     [2]simdTable
 	hist                    [256]uint64
 }
 
@@ -118,16 +122,31 @@ func (e *simdEncoder) parse(src []byte, level int) {
 		delta = -1
 	}
 	e.splitLits = level == LevelSmallestSIMD
+	e.fastCode = 0
 	switch level &^ LevelSIMDDelta {
 	case LevelSuperFastSIMD:
+		e.fastCode = 1
 		e.reset(src, delta, len(src)>>3)
-		e.encodeFastBlockGo(src)
+		if len(src) <= 64<<10 {
+			e.encodeFastBlockGo64K(src)
+		} else {
+			e.encodeFastBlockGo(src)
+		}
 	case LevelFastestSIMD:
+		e.fastCode = 4096
 		e.reset(src, delta, len(src)>>5)
-		e.encodeBlockGo(src)
+		if len(src) <= 64<<10 {
+			e.encodeBlockGo64K(src)
+		} else {
+			e.encodeBlockGo(src)
+		}
 	case LevelBalancedSIMD:
 		e.reset(src, delta, len(src)>>5)
-		e.encodeBlockBetterGo(src)
+		if len(src) <= 64<<10 {
+			e.encodeBlockBetterGo64K(src)
+		} else {
+			e.encodeBlockBetterGo(src)
+		}
 	default:
 		e.reset(src, 256, 0)
 		e.encodeBlockBest(src)
@@ -167,7 +186,7 @@ func (e *simdEncoder) reset(src []byte, deltaDiv, save int) {
 		e.litRecs = make([]byte, 0, parts*(3+128))
 	}
 	e.chunkRecs, e.switches = e.chunkRecs[:0], e.switches[:0]
-	e.nTok, e.nLL, e.nOffc, e.nEsc, e.nRaw, e.nLits = 0, 0, 0, 0, 0, 0
+	e.nTok, e.nLL, e.nOffc, e.nEsc, e.nRaw, e.nLits, e.chunks = 0, 0, 0, 0, 0, 0, 0
 	e.opLits, e.chunkLits = 0, 0
 	e.acc, e.nacc, e.overlap = 0, 0, false
 	e.src, e.pos, e.rep, e.deltaDiv, e.limit = src, 0, 1, deltaDiv, n-max(simdMinSaving, save)
@@ -372,6 +391,10 @@ func (e *simdEncoder) endChunk() {
 		e.acc >>= 8
 	}
 	e.acc, e.nacc = 0, 0
+	// The parsers' operations average at least 4 bytes, so 8 MiB fits in simdMaxChunks chunks. Fail the block if not.
+	if e.chunks++; e.chunks > simdMaxChunks {
+		e.limit = -1
+	}
 	// A block that is already too large fails, so don't code more.
 	if len(e.out)+len(e.chunkRecs) <= e.limit {
 		var flags byte
@@ -417,9 +440,9 @@ func (e *simdEncoder) finish() int {
 	}
 	start := 0
 	for i, end := range append(e.switches, e.nLits) {
-		lits := e.lits[start:end]
-		if i&1 == 1 {
-			lits = e.dlits[start:end]
+		k, lits := simdLits, e.lits[start:end]
+		if i&1 == 1 || e.deltaDiv < 0 {
+			k, lits = simdDelta, e.dlits[start:end]
 		}
 		start = end
 		if len(lits) == 0 {
@@ -427,7 +450,7 @@ func (e *simdEncoder) finish() int {
 		}
 		cuts := e.litBlocks(lits)
 		for j := 1; j < len(cuts); j++ {
-			e.litRecs = e.put(e.litRecs, simdLits, lits[cuts[j-1]:cuts[j]])
+			e.litRecs = e.put(e.litRecs, k, lits[cuts[j-1]:cuts[j]])
 			if len(e.out)+len(e.litRecs) > e.limit {
 				return 0
 			}
@@ -548,10 +571,14 @@ func (e *simdEncoder) histogram(v []byte) {
 	e.pv.Histogram(&e.hist, v)
 }
 
-// put appends the values v of stream k to e.out, and their entry to recs.
+// put appends the values v of stream k to e.out, and their entry to recs. k is simdDelta for delta literals.
 // It takes the smallest of storing v, the current table and new tables for v.
+// With e.fastCode, it takes the current table when that is smaller than storing,
+// and otherwise only tries one new table.
 // If v doesn't fit, the block fails.
 func (e *simdEncoder) put(recs []byte, k int, v []byte) []byte {
+	layout := k
+	k = min(k, simdLits)
 	var best *simdTable
 	bestBits := 8 * len(v)
 	try := func(t *simdTable, extra int) {
@@ -564,13 +591,19 @@ func (e *simdEncoder) put(recs []byte, k int, v []byte) []byte {
 		if e.have[k] {
 			try(&e.cur[k], 0)
 		}
-		e.tmp[0].setCode(k, &e.hist)
-		try(&e.tmp[0], simdTableBits+8*e.tmp[0].n)
-		e.tmp[1].setClass(k, &e.hist)
-		try(&e.tmp[1], simdTableBits+8*e.tmp[1].n)
-		if k == simdLits {
-			e.tmp[2].setClass(simdDelta, &e.hist)
-			try(&e.tmp[2], simdTableBits+8*e.tmp[2].n)
+		switch {
+		case e.fastCode == 0:
+			e.tmp[0].setCode(k, &e.hist)
+			try(&e.tmp[0], simdTableBits+8*e.tmp[0].n)
+			e.tmp[1].setClass(layout, &e.hist)
+			try(&e.tmp[1], simdTableBits+8*e.tmp[1].n)
+		case best != nil:
+		case len(v) >= e.fastCode:
+			e.tmp[0].setCode(k, &e.hist)
+			try(&e.tmp[0], simdTableBits+8*e.tmp[0].n)
+		default:
+			e.tmp[1].setClass(layout, &e.hist)
+			try(&e.tmp[1], simdTableBits+8*e.tmp[1].n)
 		}
 	}
 	room := cap(e.out) - len(e.out)
@@ -583,10 +616,10 @@ func (e *simdEncoder) put(recs []byte, k int, v []byte) []byte {
 				panic("invalid table")
 			}
 		}
-		// pivco writes in place when the output has room for the bound.
-		if bound := best.t.BlockBound(&e.hist); bound <= room {
-			out, err := e.pv.AppendEncodeBlockBound(e.out, v, &best.t, bound)
-			if err == nil && len(out)-len(e.out)+n < len(v) {
+		// With the exact size, pivco writes in place, and the output doesn't depend on spare room.
+		if size := best.t.BlockSize(&e.hist); size <= room && size+n < len(v) {
+			out, err := e.pv.AppendEncodeBlockBound(e.out, v, &best.t, size)
+			if err == nil {
 				recs = binary.AppendUvarint(recs, uint64(len(out)-len(e.out))<<3|uint64(mode))
 				e.out = out
 				if mode != simdCurrent {

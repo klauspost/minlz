@@ -44,6 +44,9 @@ const (
 
 const maxCodeLen = 11
 
+// maxChunks is the most chunks of a block.
+const maxChunks = 128
+
 // classLayout holds the values of each class, in ascending order.
 type classLayout [][]int
 
@@ -383,11 +386,14 @@ func (d *simdDecoder) chunks(sec []byte, limit int) error {
 		return fmt.Errorf("chunk records size %d larger than its section", t)
 	}
 	r := entryReader{data: sec[:len(sec)-int(t)], recs: sec[len(sec)-int(t):]}
-	for len(r.recs) > 0 {
+	for i := 0; len(r.recs) > 0; i++ {
 		flags := r.recs[0]
 		r.recs = r.recs[1:]
 		if flags&0xf0 != 0 {
 			return fmt.Errorf("invalid chunk flags %#x", flags)
+		}
+		if i == maxChunks {
+			return fmt.Errorf("more than %d chunks", maxChunks)
 		}
 		var c [streamOffsetBits + 1][]byte
 		for k := range c {
