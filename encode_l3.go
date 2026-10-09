@@ -674,12 +674,16 @@ func (e *simdEncoder) encodeBlockBest(src []byte) {
 
 		inputMargin = 8 + 2
 
-		// Estimated sizes in bits.
-		litBits    = 6
-		tokenBits  = 4
-		escapeBits = 6
-		symbolBits = 7
+		// Estimated sizes in 1/16 bits.
+		tokenBits  = 4 * 16
+		escapeBits = 6 * 16
+		symbolBits = 7 * 16
 	)
+	// Literals cost the mean code length of src, which fits the data better than a fixed cost.
+	litBits := 8 * 16
+	if n := e.litBits(src); n+simdBlockBits+simdTableBits < 8*len(src) {
+		litBits = 16 * n / len(src)
+	}
 
 	sLimit := len(src) - inputMargin
 	var lTable *[maxLTableSize]uint64
@@ -748,7 +752,7 @@ func (e *simdEncoder) encodeBlockBest(src []byte) {
 				}
 				offset := m.s - m.offset
 				if !m.rep {
-					score -= symbolBits + max(bits.Len(uint(offset))-4, 0)
+					score -= symbolBits + 16*max(bits.Len(uint(offset))-4, 0)
 				}
 				if offset < simdMaxLen {
 					return score - tokenBits*((m.length-1)/simdMaxLen)

@@ -16,6 +16,7 @@ package minlz
 
 import (
 	"encoding/binary"
+	"math"
 	"math/bits"
 	"slices"
 	"sync"
@@ -37,6 +38,8 @@ const (
 	simdRecordMax = 1 + 5*3 + 68 + 17 + 88 + 128
 	// simdTableBits is added to the cost of a new table, since every table costs decode time.
 	simdTableBits = 64 * 8
+	// simdLitSeg is the step of the literal block splits of LevelSmallestSIMD.
+	simdLitSeg = 8192
 )
 
 // simdTable is a table with its code lengths and its serialized form.
@@ -70,6 +73,10 @@ type simdEncoder struct {
 	// switches holds the literal positions where plain and delta literals take turns, starting with plain.
 	opLits, chunkLits int
 	switches          []int
+	// splitLits chooses the literal block splits by size, using cuts, segs and dp.
+	splitLits bool
+	cuts, dp  []int
+	segs      [][256]uint32
 
 	pos, rep int
 	deltaDiv int // delta literals must save 1/deltaDiv of a chunk; 0 disables them, -1 uses only them
@@ -110,6 +117,7 @@ func (e *simdEncoder) parse(src []byte, level int) {
 	if level&LevelSIMDDelta != 0 {
 		delta = -1
 	}
+	e.splitLits = level == LevelSmallestSIMD
 	switch level &^ LevelSIMDDelta {
 	case LevelSuperFastSIMD:
 		e.reset(src, delta, len(src)>>3)
@@ -417,10 +425,9 @@ func (e *simdEncoder) finish() int {
 		if len(lits) == 0 {
 			continue
 		}
-		parts := (len(lits) + pivco.MaxBlockSize - 1) / pivco.MaxBlockSize
-		size := (len(lits) + parts - 1) / parts
-		for j := 0; j < len(lits); j += size {
-			e.litRecs = e.put(e.litRecs, simdLits, lits[j:min(j+size, len(lits))])
+		cuts := e.litBlocks(lits)
+		for j := 1; j < len(cuts); j++ {
+			e.litRecs = e.put(e.litRecs, simdLits, lits[cuts[j-1]:cuts[j]])
 			if len(e.out)+len(e.litRecs) > e.limit {
 				return 0
 			}
@@ -432,6 +439,84 @@ func (e *simdEncoder) finish() int {
 		return 0
 	}
 	return len(e.out)
+}
+
+// litBlocks returns the boundaries of the literal blocks of lits.
+// With splitLits, they are on simdLitSeg boundaries, chosen for the smallest estimated size.
+// Otherwise the blocks are equal.
+func (e *simdEncoder) litBlocks(lits []byte) []int {
+	cuts := e.cuts[:0]
+	if !e.splitLits {
+		parts := (len(lits) + pivco.MaxBlockSize - 1) / pivco.MaxBlockSize
+		size := (len(lits) + parts - 1) / parts
+		for j := 0; j < len(lits); j += size {
+			cuts = append(cuts, j)
+		}
+		e.cuts = append(cuts, len(lits))
+		return e.cuts
+	}
+	n := (len(lits) + simdLitSeg - 1) / simdLitSeg
+	e.segs = slices.Grow(e.segs[:0], n)[:n]
+	for i := range e.segs {
+		e.segs[i] = [256]uint32{}
+		for _, b := range lits[i*simdLitSeg : min((i+1)*simdLitSeg, len(lits))] {
+			e.segs[i][b]++
+		}
+	}
+	// cost[i] is the smallest size of the first i segments, and from[i] where its last block starts.
+	e.dp = slices.Grow(e.dp[:0], 2*n+2)[:2*n+2]
+	cost, from := e.dp[:n+1], e.dp[n+1:]
+	cost[0] = 0
+	for i := 1; i <= n; i++ {
+		cost[i] = math.MaxInt
+		var h [256]uint64
+		for j := i - 1; j >= max(0, i-pivco.MaxBlockSize/simdLitSeg); j-- {
+			for v, f := range &e.segs[j] {
+				h[v] += uint64(f)
+			}
+			// An entry is about 3 bytes.
+			if c := cost[j] + 3*8 + simdLitBits(&h, min(i*simdLitSeg, len(lits))-j*simdLitSeg); c < cost[i] {
+				cost[i], from[i] = c, j
+			}
+		}
+	}
+	for i := n; i > 0; i = from[i] {
+		cuts = append(cuts, min(i*simdLitSeg, len(lits)))
+	}
+	e.cuts = append(cuts, 0)
+	slices.Reverse(e.cuts)
+	return e.cuts
+}
+
+// simdLitBits estimates the size in bits of a literal block of n values with histogram h:
+// stored, or its entropy plus the overhead of a block with a new table of about 16 bytes.
+// The entropy is cheaper than building the tables, which would dominate the encoding of literal-heavy data.
+func simdLitBits(h *[256]uint64, n int) int {
+	if n < simdMinCoded {
+		return 8 * n
+	}
+	// n*log2(n) - sum(f*log2(f)), in 1/256 bits.
+	e := n * simdLog2(uint64(n))
+	for _, f := range h {
+		if f > 1 {
+			e -= int(f) * simdLog2(f)
+		}
+	}
+	return min(8*n, max(e>>8, 0)+simdBlockBits+simdTableBits+16*8)
+}
+
+// simdLog2Frac holds log2(1+i/256) in 1/256 units.
+var simdLog2Frac = func() (t [256]uint8) {
+	for i := range t {
+		t[i] = uint8(math.Round(256 * math.Log2(1+float64(i)/256)))
+	}
+	return t
+}()
+
+// simdLog2 returns log2(x) for x > 0 in 1/256 units, from the 9 top bits of x.
+func simdLog2(x uint64) int {
+	b := bits.Len64(x) - 1
+	return b<<8 + int(simdLog2Frac[x<<(63-b)>>55&0xff])
 }
 
 // deltaChunk reports whether the current chunk, with lz bytes of operations, takes delta literals:

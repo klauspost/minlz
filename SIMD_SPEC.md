@@ -81,7 +81,7 @@ The first byte with the top bit clear is the last byte read.
 
 Values written one after another are read back in reverse order.
 
-Varints and reverse varints are at most 10 bytes, and need not be minimal.
+Varints and reverse varints are at most 10 bytes, and are not strictly needed to be minimal.
 
 ### 2.2 Entries
 
@@ -99,6 +99,7 @@ An entry starts with an unsigned varint: the stored size of the stream's data in
 
 With modes 2-4, the new Huffman table follows the varint, inside the entry.
 It becomes the stream's current table, also for the following chunks or literal blocks.
+Modes 0 and 1 do not change the current table.
 Each stream type has its own current table, and so do the literals. Mode 1 needs a current table.
 A block starts without current tables; they never carry over from another block.
 Mode 4 is only used for literals, in any literal block.
@@ -149,7 +150,7 @@ The number of literals must not exceed the decoded size of the block.
 
 ## 4 LZ Section
 
-The LZ section holds the operations, in chunks.
+The LZ section holds the lz stream operations, in chunks.
 
 A block may have no operations: then the LZ section is empty (`L` = 0) or has no chunks, and the output is the literals.
 
@@ -167,20 +168,101 @@ The number of chunks follows from the chunk records.
 
 ### 4.1 Chunk Records
 
-A chunk record is a flags byte, then one entry (2.2) per stream, in stream order. The flags are:
+A chunk record describes one chunk: its flags, and the stored size and coding of each of its five streams.
+The chunk records are the records of the LZ section (4), one per chunk, in chunk order.
+A chunk record has no size of its own: it ends after its last entry, and the next chunk record starts there.
 
-| Bits | Meaning                         |
-|------|---------------------------------|
-| 0    | Delta literals (4.5)            |
-| 1    | No overlapping matches (4.3)    |
-| 2-3  | Reserved hints, must be ignored |
-| 4-7  | Reserved, must be 0             |
+    chunk record:  | flags  | tokens | literal lengths | offset symbols | escapes | offset bits |
+                     1 byte   entry    entry             entry            entry     entry
 
-Encoders set the reserved hints to 0.
+The flags byte:
 
-Offset bits always use mode 0.
+| Bits | Meaning                                                                                              |
+|------|------------------------------------------------------------------------------------------------------|
+| 0    | Delta literals: the first 32 literals of each operation of the chunk are stored as differences (4.5) |
+| 1    | No overlap: no match of up to 32 bytes in the chunk is longer than its offset, after clamping (4.3)  |
+| 2-3  | Reserved hints: encoders set them to 0, decoders ignore them                                         |
+| 4-7  | Reserved, must be 0                                                                                  |
 
-### 4.2 Streams
+The no-overlap flag lets a decoder copy short matches without handling overlap. Decoders need not check it (4.3).
+
+Each entry is an unsigned varint: the stored size of the stream's data in bytes times 8, plus its mode (2.2).
+
+| Mode | Stored data                                          | After the varint        |
+|------|------------------------------------------------------|-------------------------|
+| 0    | The values, one byte each                            | Nothing                 |
+| 1    | A pivco block, coded with the stream's current table | Nothing                 |
+| 2    | A pivco block, coded with a new table                | The code lengths (2.3)  |
+| 3    | A pivco block, coded with a new table                | The class lengths (2.3) |
+
+Modes 4-7 are invalid in chunk records. The offset bits are raw bits, so their entry always has mode 0:
+its varint is the size of the offset bits times 8.
+
+A table has a fixed size, so it has no size of its own:
+
+| Stream          | Code lengths (mode 2) | Class lengths (mode 3) |
+|-----------------|-----------------------|------------------------|
+| Tokens          | 68 bytes              | 11 bytes               |
+| Literal lengths | 17 bytes              | 6 bytes                |
+| Offset symbols  | 88 bytes              | 12 bytes               |
+| Escapes         | 128 bytes             | 8 bytes                |
+
+A new table becomes the stream's current table, for this chunk and the following ones, until the stream's next new table.
+Mode 1 uses the current table of the same stream, so it needs a mode 2 or 3 entry for that stream earlier in the block.
+The literals have their own current table (2.2).
+
+The data of a chunk holds its streams in the order of its entries, each taking exactly the stored size of its entry:
+
+    chunk:  | tokens | literal lengths | offset symbols | escapes | offset bits |
+
+The first chunk starts at the start of the LZ section, and each chunk starts where the one before it ends.
+So a stream's data starts after the stored sizes of all entries before it, in its own and earlier chunk records.
+
+An entry does not store the number of values of its stream.
+The tokens give the number of operations: the stored size with mode 0, otherwise the count of the pivco block.
+The other streams hold exactly the values that the operations read (4.2):
+
+| Stream          | Number of values                                                       |
+|-----------------|------------------------------------------------------------------------|
+| Tokens          | One per operation, 1 up to the chunk limit (1.0)                       |
+| Literal lengths | One per token with the literals bit                                    |
+| Offset symbols  | One per token without the repeat bit                                   |
+| Escapes         | One per literal length 33, and one per token with match length code 33 |
+| Offset bits     | The raw bits of the offset symbols (4.4), rounded up to whole bytes    |
+
+So a decoder can check every stream of a chunk before it runs its operations.
+
+Chunks only divide the operations. The output position, the repeat offset, the next literal
+and the current tables all continue from one chunk to the next.
+
+For example, a chunk with three operations:
+
+| Operation | Literals | Match length | Offset        |
+|-----------|----------|--------------|---------------|
+| 1         | 5        | 4            | New offset 20 |
+| 2         | 2        | 6            | Repeat, so 20 |
+| 3         | 0        | 8            | New offset 3  |
+
+With all streams stored uncompressed (mode 0), the chunk data is:
+
+    tokens           12 1B 20    literals + match 4, repeat + literals + match 6, match 8
+    literal lengths  05 02
+    offset symbols   12 03       20 is symbol 18 with 1 raw bit (0); 3 is symbol 3
+    escapes                      no values
+    offset bits      00          the 1 raw bit, rounded up to a byte
+
+Operation 3 copies 8 bytes from offset 3, so the no-overlap flag is not set. The chunk record is:
+
+    00 18 10 10 00 08
+
+`00` is the flags, `18` is 3 bytes in mode 0 (`3 * 8 + 0`), each `10` is 2 bytes, the next `00` is an empty stream,
+and `08` is the 1 byte of offset bits.
+
+In a larger chunk, tokens coded as a 40-byte pivco block with a new table in class lengths have the entry
+`C3 02` (`40 * 8 + 3` = 323), followed by the 11 bytes of the table.
+A later chunk can code its tokens with that table, as mode 1 with no table after the varint.
+
+### 4.2 LZ Streams
 
 | Stream          | Values                                | Range | Code lengths | Class lengths                 |
 |-----------------|---------------------------------------|-------|--------------|-------------------------------|
@@ -191,7 +273,7 @@ Offset bits always use mode 0.
 | Offset bits     | The raw bits of the new offsets (4.4) |       | None         | None                          |
 | Literals (3)    | One per literal                       | 0-255 | 128 bytes    | 7 bytes, delta layout 5 bytes |
 
-Each stream of a chunk holds exactly the values its operations read.
+Each lz stream of a chunk holds exactly the values its operations read.
 Values outside a stream's range are invalid, also when stored uncompressed.
 
 A chunk has at least one operation, and at most the chunk limit (1.0).

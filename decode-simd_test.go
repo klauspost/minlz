@@ -596,6 +596,30 @@ func TestSIMDDecodeBuilt(t *testing.T) {
 	}
 }
 
+// TestSIMDStoredKeepsTable checks that a stored entry keeps the current table (SIMD_SPEC.md 2.2),
+// in the chunks and the literal blocks.
+func TestSIMDStoredKeepsTable(t *testing.T) {
+	ops := make([]simdTestOp, 3*64)
+	for i := range ops {
+		ops[i] = simdTestOp{ll: 4, ml: 200, off: 40}
+	}
+	// The first match must not be clamped below 32 (4.3).
+	ops[0].ll = 40
+	b := newSIMDTestBuilder(t)
+	modes := []int{simdCodeLens, simdStored, simdCurrent}
+	e, want := b.build(simdTestBlock{ops: ops, lits: bytes.Repeat([]byte("abcd"), len(ops)+9),
+		chunk: 64, litBlock: 256, modes: modes, litModes: modes})
+	for i, m := range modes {
+		if e.chunks[i].s[simdTok].mode != m || e.lits[i].mode != m {
+			t.Fatalf("entry %d: token mode %d, literal mode %d, want %d", i, e.chunks[i].s[simdTok].mode, e.lits[i].mode, m)
+		}
+	}
+	simdTestDecode(t, e.bytes(), want)
+	if ref, err := reference.DecodeSIMDBlock(e.bytes()); err != nil || !bytes.Equal(ref, want) {
+		t.Fatal("reference:", err)
+	}
+}
+
 func TestSIMDDeltaExample(t *testing.T) {
 	// SIMD_SPEC.md 4.5: the output ends with 41 42 43 07 00 41 42 43, and the repeat offset is 5.
 	lits := []byte{0x41, 0x42, 0x43, 0x07, 0x00, 0x41, 0x42, 0x43, 0x07, 0x01, 0x41, 0x42, 0x44, 0x07}
@@ -623,23 +647,23 @@ func TestSIMDExec(t *testing.T) {
 	type tcase struct {
 		ops  []simdTestOp
 		lits []byte
+		bad  bool // a match longer than 32 bytes has an offset below 32
 	}
 	var cases []tcase
 	for d0 := 1; d0 <= 40; d0 += 3 {
 		for off := 1; off <= 40; off++ {
 			for ml := 0; ml <= 40; ml += 3 {
-				if ml > simdMaxLen && min(off, d0+2) < simdMaxLen {
-					continue
-				}
 				lits := make([]byte, d0+40)
 				rng.Read(lits)
-				cases = append(cases, tcase{[]simdTestOp{{ll: d0, ml: 3, off: 7}, {ll: 2, ml: ml, off: off}, {ll: 35, ml: 5, off: 0}}, lits})
+				// The second match starts at d0+5.
+				bad := ml > simdMaxLen && min(off, d0+5) < simdMaxLen
+				cases = append(cases, tcase{[]simdTestOp{{ll: d0, ml: 3, off: 7}, {ll: 2, ml: ml, off: off}, {ll: 35, ml: 5, off: 0}}, lits, bad})
 			}
 		}
 	}
 	for range 200 {
 		ops, lits := simdTestOps(rng, 1+rng.Intn(300), "abcab\x00", 288, 1<<rng.Intn(16))
-		cases = append(cases, tcase{ops, lits})
+		cases = append(cases, tcase{ops, lits, false})
 	}
 	for _, ex := range simdTestExecs {
 		for i, tc := range cases {
@@ -656,6 +680,12 @@ func TestSIMDExec(t *testing.T) {
 				lits := pad(e.stored)
 				st := [4]int{0, 0, 1, 0}
 				ex.fn(dst, lits, &c, len(c.tok), &st)
+				if tc.bad {
+					if st[3] == 0 {
+						t.Fatalf("%s case %d delta %v: long match below offset 32 not flagged", ex.name, i, delta)
+					}
+					continue
+				}
 				d, l := st[0], st[1]
 				copy(dst[d:], lits[l:len(e.stored)])
 				if st[3] != 0 || d+len(e.stored)-l != len(want) || !bytes.Equal(dst[:len(want)], want) {
@@ -667,6 +697,35 @@ func TestSIMDExec(t *testing.T) {
 }
 
 // TestSIMDTail moves the end of the block over the last operations, so the exact loop takes over at each of them.
+// TestSIMDLongMatchTail checks the long match rule (4.3) on the last operation of a block,
+// which runs in simdExecExact.
+func TestSIMDLongMatchTail(t *testing.T) {
+	b := newSIMDTestBuilder(t)
+	for _, tc := range []struct {
+		last simdTestOp
+		ok   bool
+	}{
+		{simdTestOp{ll: 1, ml: 40, off: 32}, true},
+		{simdTestOp{ll: 1, ml: 40, off: 20}, false},
+		{simdTestOp{ll: 1, ml: 40}, false}, // The repeat offset is 20.
+	} {
+		ops := []simdTestOp{{ll: 40, ml: 288, off: 32}, {ml: 288}, {ml: 288}, {ll: 1, ml: 4, off: 20}, tc.last}
+		// No literals follow the operations, so the last one ends the output.
+		e, want := b.build(simdTestBlock{ops: ops, lits: bytes.Repeat([]byte("abcdef"), 7)})
+		block := e.bytes()
+		if len(block)-1+simdMinSaving > len(want) {
+			t.Fatal("block too large")
+		}
+		if tc.ok {
+			simdTestDecode(t, block, want)
+			continue
+		}
+		if _, err := Decode(nil, block); !errors.Is(err, ErrCorrupt) {
+			t.Errorf("last operation %+v: %v", tc.last, err)
+		}
+	}
+}
+
 func TestSIMDTail(t *testing.T) {
 	rng := rand.New(rand.NewSource(3))
 	b := newSIMDTestBuilder(t)
