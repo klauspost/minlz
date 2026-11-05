@@ -50,14 +50,14 @@ func TestSIMDAsmLayout(t *testing.T) {
 		unsafe.Offsetof(s.asmSite), unsafe.Offsetof(s.asmBase), unsafe.Offsetof(s.asmLen), unsafe.Offsetof(s.asmOff),
 		unsafe.Offsetof(s.lits), unsafe.Offsetof(s.overlap),
 	}
-	const n, a = simdChunkOps, 105
-	const c = a + 5*n + 1<<16 + 7
+	const n, a = simdChunkBuf, 105
+	const c = a + 5*n + simdRawBuf + 7
 	want := []uintptr{a, a + n, a + 2*n, a + 3*n, a + 5*n, 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, c, c + 8, c + 16, c + 24, 80, 104}
 	if !slices.Equal(got, want) {
 		t.Errorf("simdStreams offsets %v, want %v; update _generate/gen-simd-enc.go", got, want)
 	}
-	consts := []int{simdChunkOps, simdMaxLen, simdMaxLong, simdAsmDone, simdAsmFull, simdAsmCopy, simdAsmRepeat}
-	if want := []int{1 << 14, 32, 288, 0, 1, 2, 3}; !slices.Equal(consts, want) {
+	consts := []int{simdChunkOps, simdChunkBuf, simdRawBuf, simdMaxLen, simdMaxLong, simdAsmDone, simdAsmFull, simdAsmCopy, simdAsmRepeat}
+	if want := []int{1<<16 - 1, 1 << 16, 1 << 18, 32, 288, 0, 1, 2, 3}; !slices.Equal(consts, want) {
 		t.Errorf("constants %v, want %v; update _generate/gen-simd-enc.go", consts, want)
 	}
 }
@@ -353,7 +353,7 @@ func simdSplitEdgeInputs(t *testing.T, p simdAsmParser, site, off int) (fit, ove
 	rng := rand.New(rand.NewSource(int64(off + 100*site)))
 	// Short copies for most of a chunk, then the run.
 	pre := genEncRandom(rng, 100)
-	for range simdChunkOps - 3400 {
+	for range simdChunkOps * 3 / 4 {
 		pre = append(pre, genEncRandom(rng, 1+rng.Intn(3))...)
 		for o, n := 50+rng.Intn(50), 10+rng.Intn(10); n > 0; n-- {
 			pre = append(pre, pre[len(pre)-o])
